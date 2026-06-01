@@ -82,6 +82,50 @@ def render_rows(state: PickerState, width: int = 100) -> list[str]:
     return out
 
 
+def _wrap(s: str, width: int) -> list[str]:
+    """공백 기준 단순 줄바꿈(순수). CJK 폭은 근사 — 충분히 읽힌다."""
+    s = (s or "").replace("\n", " ").strip()
+    if not s:
+        return []
+    out, line = [], ""
+    for word in s.split(" "):
+        if line and len(line) + 1 + len(word) > width:
+            out.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    if line:
+        out.append(line)
+    return out
+
+
+def render_detail(state: PickerState, width: int = 80) -> list[str]:
+    """선택 항목의 '자세히 보기' 패널(순수). 제목·목적·활동·종류 + 최근 지시 몇 개."""
+    r = state.current()
+    if r is None:
+        return ["(후보 없음)"]
+    g = r.group
+    kindname = {"active": "활성", "one_off": "일회성", "unknown": "미상", "": "미요약"}
+    lines = [f"📁 {g.cwd}"]
+    if g.latest.title:
+        lines.append(f"제목: {g.latest.title}")
+    lines.append(f"종류: {kindname.get(r.kind, '미요약')} · {g.n_sessions}세션 · {g.total_user_msgs}msg"
+                 + ("  [✓ tracked]" if r.tracked else ""))
+    if r.purpose:
+        lines += [f"목적: {x}" for x in _wrap(r.purpose, width - 4)]
+        if r.activity:
+            lines += [f"활동: {x}" for x in _wrap(r.activity, width - 4)]
+    else:
+        lines.append("(e 를 누르면 haiku 로 목적/활동 요약)")
+    # 최근 사람 지시 몇 개 — LLM 없이도 '뭐였는지' 알아보게.
+    recent = [t for t in (g.latest.user_trace or [])][-3:]
+    if recent:
+        lines.append("최근 지시:")
+        for t in recent:
+            lines += [f"  · {x}" for x in _wrap(t, width - 6)[:2]]  # 지시당 최대 2줄
+    return lines
+
+
 def reconcile(state: PickerState, registry: Registry) -> Registry:
     """피커 선택을 레지스트리에 반영(체크된 건 track, 해제된 건 untrack). 저장은 호출자."""
     chosen = set(state.tracked_cwds())
@@ -127,13 +171,24 @@ def _loop(stdscr, state: PickerState, thinker) -> bool:
     while True:
         stdscr.erase()
         h, w = stdscr.getmaxyx()
+        detail_h = min(11, max(4, h // 3))
+        list_h = max(1, h - detail_h - 3)        # header + 구분선 + status 제외
         put(0, 0, f" 내 프로젝트 고르기 ({state.n_tracked()} 선택) — {msg}".ljust(w),
             curses.A_REVERSE)
-        for i, line in enumerate(render_rows(state, w - 2)):
-            if 1 + i >= h - 1:
-                break
+        # 리스트(선택이 안 보이면 스크롤)
+        rows = render_rows(state, w - 2)
+        top = max(0, min(state.selected - list_h + 1, len(rows) - list_h)) if len(rows) > list_h else 0
+        for i in range(top, min(len(rows), top + list_h)):
             attr = curses.A_BOLD if i == state.selected else curses.A_NORMAL
-            put(1 + i, 0, line, attr)
+            put(1 + (i - top), 0, rows[i], attr)
+        # 구분선 + 상세 패널
+        sep = h - detail_h - 1
+        put(sep, 0, "─" * (w - 1))
+        for j, line in enumerate(render_detail(state, w - 2)):
+            if sep + 1 + j >= h - 1:
+                break
+            put(sep + 1 + j, 0, line)
+        put(h - 1, 0, msg.ljust(w), curses.A_REVERSE)
         stdscr.refresh()
         ch = stdscr.getch()
         if ch in (ord("q"), ord("Q")):

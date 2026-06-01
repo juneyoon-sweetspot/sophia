@@ -1,7 +1,13 @@
 """세션 피커 순수 로직 검증 (curses 없이)."""
 from sophia.adapters.registry import Registry
 from sophia.adapters.sessions import CwdGroup, SessionInfo
-from sophia.ui.picker import PickerState, build_state, reconcile, render_rows
+from sophia.ui.picker import (
+    PickerState,
+    build_state,
+    reconcile,
+    render_detail,
+    render_rows,
+)
 
 
 def _group(cwd, first="첫 지시", total=10, title=""):
@@ -61,6 +67,26 @@ def test_label_prefers_claude_title_over_first_msg():
     # 요약하면 요약이 이긴다.
     st.rows[0].purpose = "사내 RAG"
     assert st.rows[0].label == "사내 RAG"
+
+
+def test_render_detail_shows_title_and_recent_before_summary():
+    g = _group("/proj/x", first="첫 지시", title="Review repository")
+    g.latest.user_trace = ["첫 지시", "두번째", "마지막 지시"]
+    st = build_state([g], Registry())
+    lines = render_detail(st, 80)
+    blob = "\n".join(lines)
+    assert "/proj/x" in blob                       # cwd
+    assert "Review repository" in blob             # 제목
+    assert "최근 지시:" in blob and "마지막 지시" in blob  # 최근 지시(LLM 없이)
+    assert "e 를 누르면" in blob                     # 미요약 안내
+
+
+def test_render_detail_shows_summary_when_present():
+    st = build_state([_group("/p")], Registry())
+    st.rows[0].purpose, st.rows[0].activity, st.rows[0].kind = "RAG 구축", "임베딩 비교", "active"
+    blob = "\n".join(render_detail(st, 80))
+    assert "목적: RAG 구축" in blob and "활동: 임베딩 비교" in blob
+    assert "활성" in blob                            # kind 한글 표기
 
 
 def test_reconcile_tracks_checked_and_untracks_unchecked():
