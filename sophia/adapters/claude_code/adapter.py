@@ -34,11 +34,15 @@ class ClaudeCodeBackend(WorkerBackend):
         timeout_s: float = DEFAULT_TIMEOUT_S,
         base_repo: str | None = None,
         read_only: bool = False,
+        cwd: str | None = None,
     ) -> None:
         self.claude_bin = claude_bin
         self.extra_args = extra_args or []
         self.timeout_s = timeout_s
         self.base_repo = base_repo  # git repo 면 worktree 격리 가능
+        # cwd: 워커를 이 디렉토리에서 돌린다(포트폴리오가 프로젝트별로 다르게 줄 때).
+        # isolation worktree 가 잡히면 그쪽이 우선. None 이면 프로세스 cwd 상속.
+        self.cwd = cwd
         # read_only: 워커를 '계획 모드 + MCP 미로드'로 펜싱한다.
         #  - --permission-mode plan: 파일 쓰기/편집/실행 차단(읽고 분석·계획만)
         #  - --strict-mcp-config(+--mcp-config 없음): MCP 서버 0개 → 외부 부작용 차단
@@ -61,14 +65,15 @@ class ClaudeCodeBackend(WorkerBackend):
         argv = self._build_argv(spec)
         # isolation=True 면 git worktree 로 격리 cwd 확보(불가 시 None=격리 안 함)
         repo = self.base_repo if spec.isolation else None
-        async with worktree(repo, spec.premise_id or "task") as cwd:
+        async with worktree(repo, spec.premise_id or "task") as wt_cwd:
+            run_cwd = wt_cwd or self.cwd  # worktree 격리 우선, 없으면 지정 cwd, 둘 다 없으면 상속
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,  # 새 프로세스 그룹 → 손자까지 한 번에 정리
-                    cwd=cwd,  # None 이면 현재 cwd
+                    cwd=run_cwd,  # None 이면 현재 cwd
                 )
             except Exception as e:  # spawn 실패 → 루프가 죽지 않게 안전 반환
                 return WorkResult(summary=f"claude 실행 실패: {e}", ok=False)
