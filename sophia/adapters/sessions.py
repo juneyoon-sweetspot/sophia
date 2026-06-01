@@ -217,11 +217,15 @@ async def draft_brief(si: "SessionInfo", thinker) -> dict:
             return {
                 "intent": str(out.get("intent", "")).strip(),
                 "progress": str(out.get("progress", "")).strip(),
-                "boundaries": str(out.get("boundaries", "")).strip(),
+                # 경계는 비우지 않는다 — 비면 안전 기본값(완결 문장).
+                "boundaries": str(out.get("boundaries", "")).strip() or _SAFE_BOUNDARY,
             }
     except Exception:
         pass
-    return {"intent": si.first_user_text[:100], "progress": "", "boundaries": ""}
+    return {"intent": si.first_user_text[:100], "progress": "", "boundaries": _SAFE_BOUNDARY}
+
+
+_SAFE_BOUNDARY = "SOPHIA 는 분석·제안만 하고, 파일/외부 변경 없이 비가역 결정은 사람에게 남긴다."
 
 
 def _slug(cwd: str) -> str:
