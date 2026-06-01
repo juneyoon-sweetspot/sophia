@@ -26,6 +26,30 @@ DEFAULT_ROOT = Path.home() / ".claude" / "projects"
 # goal/의도로 쓰기엔 노이즈인 user 라인 프리픽스(슬래시커맨드·하네스 주입·로컬 출력).
 _NOISE_PREFIXES = ("<", "[Request interrupted", "Caveat:", "/")
 
+# SOPHIA 자신이 일꾼/thinker 로 띄운 claude 세션의 첫 메시지 프리픽스.
+# 재임포트할 때 이걸 안 거르면 SOPHIA 가 자기 프롬프트를 '사용자 의도'로 다시 읽는
+# 오염 루프에 빠진다(실측: AX-Partners goal 이 SOPHIA 프롬프트로 덮였다).
+# (한계: 템플릿 문구가 바뀌면 같이 갱신 필요. 더 견고한 sentinel 주입은 후속 과제.)
+_SOPHIA_MARKERS = (
+    "다음 전제가 참이라고 가정하고",          # WORKER_PREMISE
+    "다음 주제를 리서치하고",                  # WORKER_RESEARCH
+    "다음 분야의 최근 변화를 스캔하고",        # WORKER_MONITOR
+    "아래는 한 프로젝트에서 사람이 마지막으로",  # READONLY_REQUEST
+    "다음 요청을 수행하기 위해 세울 수 있는",   # PREMISE_DERIVE
+    "아래는 여러 전제로 병렬 작업한 결과다",     # REPORT_COMPRESS
+    "아래는 한 요청을 전제로 실행한 결과다",     # BLOCKERS_DERIVE
+    "원래 요청을 위해 서로 다른 전제로",        # SYNTHESIZE
+    "방금 본부장에게 아래 보고를 올렸다",        # ANTICIPATE
+    "지금 할당된 작업이 없다",                  # IDLE_PROPOSE
+    "아래는 한 작업 디렉토리에서 사용자가",      # SESSION_SUMMARIZE
+)
+
+
+def is_sophia_session(first_user_text: str) -> bool:
+    """첫 user 메시지가 SOPHIA 자신의 프롬프트면 True(재임포트 제외용)."""
+    s = (first_user_text or "").strip()
+    return s.startswith(_SOPHIA_MARKERS)
+
 
 MAX_TRACE = 30  # 요약에 넘길 user 메시지 궤적 상한(프롬프트 폭주 방지)
 
@@ -109,16 +133,24 @@ def read_session(path: str | Path) -> SessionInfo | None:
     )
 
 
-def scan_sessions(root: str | Path = DEFAULT_ROOT) -> list[SessionInfo]:
-    """projects 루트 아래 모든 세션을 읽어 SessionInfo 리스트(최신순)로."""
+def scan_sessions(
+    root: str | Path = DEFAULT_ROOT, *, exclude_sophia: bool = True
+) -> list[SessionInfo]:
+    """projects 루트 아래 모든 세션을 읽어 SessionInfo 리스트(최신순)로.
+
+    exclude_sophia: SOPHIA 자신이 띄운 세션을 뺀다(재임포트 오염 루프 차단). 기본 on.
+    """
     root = Path(root)
     out: list[SessionInfo] = []
     if not root.exists():
         return out
     for jf in root.rglob("*.jsonl"):
         si = read_session(jf)
-        if si is not None:
-            out.append(si)
+        if si is None:
+            continue
+        if exclude_sophia and is_sophia_session(si.first_user_text):
+            continue
+        out.append(si)
     out.sort(key=lambda s: s.mtime, reverse=True)
     return out
 
@@ -174,11 +206,15 @@ def group_by_cwd(
     root: str | Path = DEFAULT_ROOT,
     *,
     exclude_cwds: set[str] | None = None,
+    exclude_sophia: bool = True,
 ) -> list[CwdGroup]:
-    """모든 세션을 cwd 별로 묶어 집계. cwd 당 최신 세션 + 누적 사용량."""
+    """모든 세션을 cwd 별로 묶어 집계. cwd 당 최신 세션 + 누적 사용량.
+
+    exclude_sophia: SOPHIA 자신의 세션 제외(재임포트 오염 차단). 기본 on.
+    """
     exclude = exclude_cwds or set()
     groups: dict[str, CwdGroup] = {}
-    for si in scan_sessions(root):
+    for si in scan_sessions(root, exclude_sophia=exclude_sophia):
         if not si.cwd or si.cwd in exclude:
             continue
         g = groups.get(si.cwd)
