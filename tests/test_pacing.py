@@ -5,6 +5,7 @@ from sophia.core.loop.scheduler import Scheduler
 from sophia.core.manager.director import Director
 from sophia.core.manager.pacing import (
     backlog_score,
+    daily_budget_state,
     pace_for,
     quota_pressure,
     snapshot_counts,
@@ -76,6 +77,31 @@ def test_scheduler_pace_on_throttles_with_backlog():
     ho.blockers = [{"q": i} for i in range(8)]           # 베이스라인 0 → 백로그 8
     p = s._pace(ho)
     assert p.premise_count < 3 and p.idle_multiplier > 1.0
+
+
+# ---------- 하루 예산 ----------
+
+def test_daily_budget_within():
+    used, remaining, exhausted = daily_budget_state(14, day_start_pct=14, budget_pp=20)
+    assert used == 0 and remaining == 20 and exhausted is False
+
+
+def test_daily_budget_partial():
+    used, remaining, exhausted = daily_budget_state(26, day_start_pct=14, budget_pp=20)
+    assert used == 12 and remaining == 8 and exhausted is False
+
+
+def test_daily_budget_exhausted():
+    used, remaining, exhausted = daily_budget_state(40, day_start_pct=14, budget_pp=20)
+    assert used == 26 and remaining == 0 and exhausted is True
+
+
+def test_daily_budget_handles_none_and_negative():
+    # 측정 실패/리셋 방어
+    used, _, ex = daily_budget_state(None, day_start_pct=14, budget_pp=20)
+    assert used == 0 and ex is False
+    used2, _, _ = daily_budget_state(10, day_start_pct=14, budget_pp=20)  # 주간이 줄면(리셋) 0
+    assert used2 == 0
 
 
 # ---------- quota 압력 ----------

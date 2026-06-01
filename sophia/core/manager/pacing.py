@@ -55,6 +55,18 @@ def quota_pressure(week_pct, cap_pct) -> float:
     return frac * 8.0
 
 
+def daily_budget_state(current_week_pct, day_start_pct, budget_pp: float = 20.0):
+    """하루 quota 예산 상태 → (오늘 쓴 pp, 남은 pp, 소진여부).
+
+    throttle 목표가 '침묵'이 아니라 '하루 예산'이다 — 하루 동안 주간 quota 를 budget_pp
+    만큼 쓰고, 다 쓰면 대기(사람 응답주기 ≈ 하루라는 가정). 주간% 의 '오늘 증가분'으로 잰다
+    (사람+SOPHIA 합산이라 보수적 — 사용량 높으면 SOPHIA 가 양보).
+    """
+    used = max(0.0, (current_week_pct or 0) - (day_start_pct or 0))
+    remaining = max(0.0, budget_pp - used)
+    return used, remaining, used >= budget_pp
+
+
 @dataclass
 class Pace:
     premise_count: int        # 자율 분기 폭(백로그↑ → ↓, 최소 1)
