@@ -38,10 +38,11 @@ DIGEST_DIR = Path.home() / ".sophia" / "digests"
 HANDOFF_DIR = Path.home() / ".sophia" / "handoffs"
 
 READONLY_REQUEST = (
-    "아래는 한 프로젝트에서 사람이 마지막으로 남긴 지시다. 지금은 분석만 한다(읽기 전용): "
-    "실제 파일을 읽어 현재 어디까지 왔는지 추정하고, 다음 한 스텝을 제안하라. "
-    "사람만 정할 수 있는 결정(방향·승인·확인)이 있으면 재구성 질문으로 남겨라.\n\n"
-    "프로젝트: {label}\n사람의 마지막 지시: {last}"
+    "지금은 분석만 한다(읽기 전용): 실제 파일을 읽어 현재 어디까지 왔는지 추정하고, "
+    "'진전 기준'을 향해 다음 한 스텝을 제안하라. 경계를 넘지 말고, 사람만 정할 수 있는 "
+    "결정이 있으면 재구성 질문으로 남겨라.\n\n"
+    "목표(intent): {intent}\n진전 기준(progress): {progress}\n경계(boundaries): {boundaries}\n"
+    "사람의 마지막 지시: {last}"
 )
 
 
@@ -54,20 +55,26 @@ def _build_notifier(stamp: str):
     return MultiNotifier(*channels) if channels else StdoutNotifier()
 
 
-def _project_for(cwd: str, note: str) -> Project | None:
+def _project_for(t) -> Project | None:
     # 그 cwd 의 최신 '사람' 세션만 재임포트(SOPHIA 자기세션 자동 제외).
-    ps = import_projects(only_cwds={cwd}, min_user_msgs=1,
+    ps = import_projects(only_cwds={t.cwd}, min_user_msgs=1,
                          handoff_dir=HANDOFF_DIR)
     if not ps:
         return None
     p = ps[0]
-    p.goal = note or Path(cwd).name      # goal 고정 → resume 가 누적
+    # 의도 브리프(있으면)를 나침반으로. goal 은 고정(intent) → resume 가 누적.
+    p.goal = t.intent or t.note or Path(t.cwd).name
+    p.meta["progress"] = t.progress
+    p.meta["boundaries"] = t.boundaries
     return p
 
 
 def _factory(p: Project):
     last = (p.pending_requests or [""])[0]
-    req = READONLY_REQUEST.format(label=p.goal, last=last)
+    req = READONLY_REQUEST.format(
+        intent=p.goal, progress=p.meta.get("progress", "") or "(미지정)",
+        boundaries=p.meta.get("boundaries", "") or "(없음)", last=last,
+    )
     return Scheduler(
         backend=ClaudeCodeBackend(read_only=True, cwd=p.meta["cwd"]),
         director=Director(goal=p.goal),
@@ -93,7 +100,7 @@ def main() -> int:
         print("등록된 프로젝트 없음. `python3 scripts/track.py add <cwd> \"메모\"` 로 등록.")
         return 1
 
-    projects = [pr for t in reg.items if (pr := _project_for(t.cwd, t.note))]
+    projects = [pr for t in reg.items if (pr := _project_for(t))]
     if not projects:
         print("tracked cwd 에서 사람 세션을 못 찾음(전부 SOPHIA 세션이거나 비어있음).")
         return 1

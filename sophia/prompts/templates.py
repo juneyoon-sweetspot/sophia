@@ -206,6 +206,27 @@ REVERSIBILITY_SCHEMA = {
     "required": ["irreversible"],
 }
 
+# 세션 → 의도 브리프 초안 (부임 시 1회 — 빈 폼 대신 채워서 주고 사람은 예외만 수정)
+BRIEF_DRAFT = (
+    "아래는 한 작업 디렉토리에서 사람이 클로드와 나눈 user 메시지들(시간순)이다. 사람이 "
+    "이 프로젝트를 SOPHIA 에 맡길 때 줄 '의도 브리프' 초안을 채워라. 세 줄:\n"
+    "- intent: 이 사람이 무엇을 하려는가(목표) 한 줄.\n"
+    "- progress: 무엇이면 '한 발 나아갔다'인가(완료 아님 — 방향/나침반) 한 줄.\n"
+    "- boundaries: 하지 말 것 / 비-목표 / 사람만 정할 것 한 줄(없으면 빈 문자열).\n"
+    "근거가 빈약하면 추측을 줄이고 짧게. 사람이 고칠 초안일 뿐이다.\n\n"
+    "디렉토리: {cwd}\nuser 메시지 궤적:\n{trace}"
+)
+
+BRIEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {"type": "string"},
+        "progress": {"type": "string"},
+        "boundaries": {"type": "string"},
+    },
+    "required": ["intent", "progress"],
+}
+
 # idle → 자가 과업 제안
 IDLE_PROPOSE = (
     "지금 할당된 작업이 없다. 팀장으로서 지금 진행 중인 목표('{goal}')에 도움이 될 "

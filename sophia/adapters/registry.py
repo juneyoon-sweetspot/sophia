@@ -20,6 +20,13 @@ class Tracked:
     cwd: str
     note: str = ""          # 사람이 적는 한 줄(이게 뭐였는지)
     added_at: str = ""      # 호출자가 채워 넣음(여기선 시간 안 만든다 — 결정성)
+    # 의도 브리프(SOPHIA 초안 → 사람 수정). daily 워커의 목표·나침반·가드레일.
+    intent: str = ""        # 무엇을 하려는가(목표)
+    progress: str = ""      # 무엇이면 '한 발 나아갔다'인가(나침반 — completion gate 아님)
+    boundaries: str = ""    # 하지 말 것 / 비-목표 (가드레일)
+
+    def has_brief(self) -> bool:
+        return bool(self.intent or self.progress or self.boundaries)
 
 
 @dataclass
@@ -64,6 +71,10 @@ class Registry:
             return cls()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return cls(items=[Tracked(**d) for d in data.get("items", [])])
+            from dataclasses import fields
+            known = {f.name for f in fields(Tracked)}
+            items = [Tracked(**{k: v for k, v in d.items() if k in known})
+                     for d in data.get("items", [])]
+            return cls(items=items)
         except Exception:
             return cls()  # 손상된 레지스트리로 죽지 않는다

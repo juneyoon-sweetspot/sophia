@@ -198,6 +198,32 @@ async def summarize_session(si: "SessionInfo", thinker, group=None) -> dict:
     return {"purpose": si.first_user_text[:80], "activity": "", "kind": "unknown"}
 
 
+async def draft_brief(si: "SessionInfo", thinker) -> dict:
+    """세션 궤적 → 의도 브리프 초안 {intent, progress, boundaries}. 사람이 고칠 초안.
+
+    빈 폼을 사람에게 들이밀지 않기 위함. 근거(궤적)가 빈약하면 초안도 빈약 — 그땐
+    사람이 진짜 의도를 채워야 한다(garbage-in 은 한 단계 위에 남는다).
+    """
+    from ..prompts import templates  # 지연 import(순환 회피)
+
+    trace = "\n".join(f"- {t}" for t in (si.user_trace or [si.first_user_text]))
+    try:
+        out = await thinker.think(
+            templates.BRIEF_DRAFT.format(cwd=si.cwd, trace=trace),
+            system=templates.SYSTEM_MANAGER,
+            schema=templates.BRIEF_SCHEMA,
+        )
+        if isinstance(out, dict) and out.get("intent"):
+            return {
+                "intent": str(out.get("intent", "")).strip(),
+                "progress": str(out.get("progress", "")).strip(),
+                "boundaries": str(out.get("boundaries", "")).strip(),
+            }
+    except Exception:
+        pass
+    return {"intent": si.first_user_text[:100], "progress": "", "boundaries": ""}
+
+
 def _slug(cwd: str) -> str:
     """cwd → 짧은 프로젝트 id (마지막 경로 조각)."""
     base = cwd.rstrip("/").rsplit("/", 1)[-1] or "root"
