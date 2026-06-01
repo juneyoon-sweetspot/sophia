@@ -170,6 +170,33 @@ SESSION_SUMMARIZE_SCHEMA = {
     "required": ["purpose", "activity", "kind"],
 }
 
+# 회색지대 행동 → 비가역 판정 (커밋 게이트의 핵심)
+# 규칙으로 못 가른 것만 온다. 맥락(격리 여부)을 보고 '되돌릴 수 없는' 것만 골라라.
+REVERSIBILITY_JUDGE = (
+    "아래는 일꾼이 하려는 행동들이다(실행 맥락: {env}). 이 중 '되돌릴 수 없는' 것만 "
+    "골라라 — 외부로 나가거나(발송·게시·과금), 지우거나, 공유 상태를 덮어쓰는 행동. "
+    "읽기·조회·격리공간 안 변경처럼 되돌릴 수 있는 건 빼라. 사람은 두 번 일하기 싫어하지만 "
+    "비가역 행동은 한 번 틀리면 못 무른다 — 그것만 신중히.\n\n행동:\n{actions}"
+)
+
+REVERSIBILITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "irreversible": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "비가역 행동(원문)"},
+                    "why": {"type": "string", "description": "왜 되돌릴 수 없는지"},
+                },
+                "required": ["action", "why"],
+            },
+        }
+    },
+    "required": ["irreversible"],
+}
+
 # idle → 자가 과업 제안
 IDLE_PROPOSE = (
     "지금 할당된 작업이 없다. 팀장으로서 지금 진행 중인 목표('{goal}')에 도움이 될 "
