@@ -106,6 +106,22 @@ def test_read_session_collects_user_trace(tmp_path):
     assert si.path.endswith("s.jsonl")
 
 
+def test_read_session_picks_up_ai_title(tmp_path):
+    d = tmp_path / "-p"
+    d.mkdir()
+    f = d / "s.jsonl"
+    lines = [
+        {"type": "user", "cwd": "/p", "message": {"role": "user", "content": "리포 리뷰해"}},
+        {"type": "ai-title", "sessionId": "s", "aiTitle": "Review repository"},
+        {"type": "assistant", "message": {"role": "assistant", "content": "ok"}},
+    ]
+    f.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lines), encoding="utf-8")
+    si = read_session(f)
+    assert si.title == "Review repository"        # 클로드 세션 제목 수집
+    assert si.first_user_text == "리포 리뷰해"      # 제목 라인은 user 텍스트에 안 섞임
+    assert si.n_user_msgs == 1
+
+
 def test_summarize_session_parses(tmp_path):
     f = _write_session(tmp_path, "-p", "s", "/p", ["RAG 만들래", "임베딩 뭐 쓰지"])
     si = read_session(f)

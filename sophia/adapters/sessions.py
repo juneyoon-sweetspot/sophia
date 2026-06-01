@@ -65,14 +65,43 @@ class SessionInfo:
     n_user_msgs: int
     path: str = ""                                    # 트랜스크립트 파일 경로
     user_trace: list[str] = field(default_factory=list)  # user 메시지 궤적(요약용, 상한)
+    title: str = ""                                   # 클로드 세션 제목(aiTitle) — 사람이 보는 이름
 
 
-def _user_texts(path: Path):
-    """트랜스크립트에서 (cwd, 실질 user 텍스트)를 순서대로 흘린다. 노이즈는 건너뜀."""
+def _user_text_of(d: dict) -> str | None:
+    """한 user 라인 → 실질 텍스트(노이즈면 None)."""
+    content = d.get("message", {}).get("content")
+    if isinstance(content, str):
+        txt = content
+    elif isinstance(content, list):
+        txt = " ".join(
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    else:
+        txt = ""
+    txt = txt.strip()
+    if not txt or txt.startswith(_NOISE_PREFIXES):
+        return None
+    return txt
+
+
+def read_session(path: str | Path) -> SessionInfo | None:
+    """한 세션 jsonl → SessionInfo. 실질 user 메시지가 하나도 없으면 None.
+
+    단일 패스로 user 텍스트 + aiTitle(클로드가 보여주는 세션 제목)을 함께 수집한다.
+    """
+    path = Path(path)
+    cwd = ""
+    first = last = None
+    n = 0
+    trace: list[str] = []
+    title = ""
     try:
         fh = path.open(encoding="utf-8")
     except OSError:
-        return
+        return None
     with fh:
         for line in fh:
             line = line.strip()
@@ -82,40 +111,22 @@ def _user_texts(path: Path):
                 d = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if d.get("type") != "user":
+            t = d.get("type")
+            if t == "ai-title" and d.get("aiTitle"):
+                title = str(d["aiTitle"]).strip()  # 마지막(최신) 제목이 이긴다
                 continue
-            content = d.get("message", {}).get("content")
-            if isinstance(content, str):
-                txt = content
-            elif isinstance(content, list):
-                txt = " ".join(
-                    b.get("text", "")
-                    for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
-                )
-            else:
-                txt = ""
-            txt = txt.strip()
-            if not txt or txt.startswith(_NOISE_PREFIXES):
+            if t != "user":
                 continue
-            yield d.get("cwd"), txt
-
-
-def read_session(path: str | Path) -> SessionInfo | None:
-    """한 세션 jsonl → SessionInfo. 실질 user 메시지가 하나도 없으면 None."""
-    path = Path(path)
-    cwd = ""
-    first = last = None
-    n = 0
-    trace: list[str] = []
-    for c, txt in _user_texts(path):
-        n += 1
-        if not cwd and c:
-            cwd = c
-        if first is None:
-            first = txt
-        last = txt
-        trace.append(txt)
+            txt = _user_text_of(d)
+            if txt is None:
+                continue
+            n += 1
+            if not cwd and d.get("cwd"):
+                cwd = d.get("cwd")
+            if first is None:
+                first = txt
+            last = txt
+            trace.append(txt)
     if first is None:
         return None
     try:
@@ -129,7 +140,7 @@ def read_session(path: str | Path) -> SessionInfo | None:
     return SessionInfo(
         cwd=cwd, session_id=path.stem, first_user_text=first,
         last_user_text=last or first, mtime=mtime, n_user_msgs=n,
-        path=str(path), user_trace=trace,
+        path=str(path), user_trace=trace, title=title,
     )
 
 

@@ -28,9 +28,10 @@ class Row:
 
     @property
     def label(self) -> str:
-        if self.purpose:
+        if self.purpose:  # e 로 요약했으면 그게 최우선
             return self.purpose + (f" — {self.activity}" if self.activity else "")
-        return self.group.latest.first_user_text  # 요약 전엔 첫 지시
+        # 요약 전엔 클로드 세션 제목(사람이 보는 rename 이름) → 없으면 첫 지시
+        return self.group.latest.title or self.group.latest.first_user_text
 
 
 @dataclass
@@ -114,16 +115,25 @@ def _loop(stdscr, state: PickerState, thinker) -> bool:
     stdscr.keypad(True)
     msg = "↑↓ 이동 · space 선택 · e 요약 · s 저장 · q 취소"
     saved = False
+
+    def put(y, x, s, attr=0):
+        # 마지막 줄/우하단 코너에 폭 전부를 쓰면 curses 가 ERR 을 던진다. w-1 로 자르고 삼킴.
+        h, w = stdscr.getmaxyx()
+        try:
+            stdscr.addnstr(y, x, s, max(0, w - 1 - x), attr)
+        except curses.error:
+            pass
+
     while True:
         stdscr.erase()
         h, w = stdscr.getmaxyx()
-        stdscr.addnstr(0, 0, f" 내 프로젝트 고르기 ({state.n_tracked()} 선택) — {msg}".ljust(w),
-                       w, curses.A_REVERSE)
+        put(0, 0, f" 내 프로젝트 고르기 ({state.n_tracked()} 선택) — {msg}".ljust(w),
+            curses.A_REVERSE)
         for i, line in enumerate(render_rows(state, w - 2)):
             if 1 + i >= h - 1:
                 break
             attr = curses.A_BOLD if i == state.selected else curses.A_NORMAL
-            stdscr.addnstr(1 + i, 0, line, w - 1, attr)
+            put(1 + i, 0, line, attr)
         stdscr.refresh()
         ch = stdscr.getch()
         if ch in (ord("q"), ord("Q")):
@@ -135,7 +145,7 @@ def _loop(stdscr, state: PickerState, thinker) -> bool:
         elif ch == ord(" "):
             state.toggle()
         elif ch in (ord("e"), ord("E")):
-            stdscr.addnstr(h - 1, 0, " 요약 중(haiku)…".ljust(w), w, curses.A_REVERSE)
+            put(h - 1, 0, " 요약 중(haiku)…", curses.A_REVERSE)
             stdscr.refresh()
             try:
                 _summarize_current(state, thinker)

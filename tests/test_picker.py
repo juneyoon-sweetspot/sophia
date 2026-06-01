@@ -4,9 +4,9 @@ from sophia.adapters.sessions import CwdGroup, SessionInfo
 from sophia.ui.picker import PickerState, build_state, reconcile, render_rows
 
 
-def _group(cwd, first="첫 지시", total=10):
+def _group(cwd, first="첫 지시", total=10, title=""):
     si = SessionInfo(cwd=cwd, session_id="s", first_user_text=first,
-                     last_user_text="끝", mtime=1.0, n_user_msgs=total)
+                     last_user_text="끝", mtime=1.0, n_user_msgs=total, title=title)
     return CwdGroup(cwd=cwd, latest=si, n_sessions=1, total_user_msgs=total)
 
 
@@ -51,6 +51,16 @@ def test_render_uses_summary_when_present():
     st = _state("/p")
     st.rows[0].purpose, st.rows[0].activity = "RAG 구축", "임베딩 선택"
     assert "RAG 구축 — 임베딩 선택" in render_rows(st)[0]
+
+
+def test_label_prefers_claude_title_over_first_msg():
+    # 요약 전엔 클로드 세션 제목(rename 이름)을 보여준다.
+    st = build_state([_group("/p", first="이 레포 확인해봐", title="Review repository")],
+                     Registry())
+    assert st.rows[0].label == "Review repository"
+    # 요약하면 요약이 이긴다.
+    st.rows[0].purpose = "사내 RAG"
+    assert st.rows[0].label == "사내 RAG"
 
 
 def test_reconcile_tracks_checked_and_untracks_unchecked():
