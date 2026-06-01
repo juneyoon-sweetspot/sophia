@@ -156,6 +156,11 @@ def scan_sessions(
     if not root.exists():
         return out
     for jf in root.rglob("*.jsonl"):
+        # 서브에이전트 세션(agent-*.jsonl / subagents/)은 사람 세션이 아니다 — SOPHIA 워커가
+        # 띄운 Explore/Task 류가 cwd 에 transcript 를 남기는데, 이게 '최신 사람 세션'으로
+        # 임포트되면 false 'touched' 재실행 + goal 오염을 일으킨다(관찰에서 잡힌 버그).
+        if exclude_sophia and (jf.stem.startswith("agent-") or "subagents" in jf.parts):
+            continue
         si = read_session(jf)
         if si is None:
             continue

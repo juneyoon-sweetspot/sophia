@@ -100,3 +100,21 @@ def test_scan_excludes_sophia_sessions(tmp_path):
     assert [s.first_user_text for s in kept] == ["진짜 내 지시"]
     both = scan_sessions(tmp_path, exclude_sophia=False)
     assert len(both) == 2
+
+
+def test_scan_excludes_subagent_sessions(tmp_path):
+    # 서브에이전트 세션(agent-*.jsonl / subagents/)은 사람 세션으로 안 잡혀야 한다.
+    d = tmp_path / "-proj"
+    (d / "subagents").mkdir(parents=True)
+    (d / "human.jsonl").write_text(json.dumps(
+        {"type": "user", "cwd": "/proj", "message": {"role": "user", "content": "진짜 지시"}},
+        ensure_ascii=False), encoding="utf-8")
+    (d / "agent-aa11.jsonl").write_text(json.dumps(   # 워커 서브에이전트(영어, 한국어마커 안 걸림)
+        {"type": "user", "cwd": "/proj",
+         "message": {"role": "user", "content": "Explore two directories ..."}},
+        ensure_ascii=False), encoding="utf-8")
+    (d / "subagents" / "sub.jsonl").write_text(json.dumps(
+        {"type": "user", "cwd": "/proj", "message": {"role": "user", "content": "subagent work"}},
+        ensure_ascii=False), encoding="utf-8")
+    kept = scan_sessions(tmp_path)
+    assert [s.first_user_text for s in kept] == ["진짜 지시"]   # 서브에이전트 둘 다 제외
