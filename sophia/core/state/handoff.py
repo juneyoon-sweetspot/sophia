@@ -45,6 +45,9 @@ class Handoff:
     speculative_requests: list[str] = field(default_factory=list)
     # synthesis 기록: 어느 전제를 왜 채택/기각했는지. [{request, chosen, rationale, rejected, grafts}]
     syntheses: list[dict[str, Any]] = field(default_factory=list)
+    # 본부장이 결정해야 할 항목(매니저가 추출). [{question, leverage, context}]
+    # Portfolio 가 이걸 읽어 project.blockers → 단일 다이제스트의 '결정 필요' 칸을 채운다.
+    blockers: list[dict[str, Any]] = field(default_factory=list)
     # 6h 무인 실행에서 무한증가(메모리 누수) 방지용 상한. 오래된 것부터 버린다.
     max_items: int = 500
 
@@ -113,6 +116,7 @@ class Handoff:
             self.artifacts = self.artifacts[-self.max_items:]
             self.reports = self.reports[-self.max_items:]
             self.syntheses = self.syntheses[-self.max_items:]
+            self.blockers = self.blockers[-self.max_items:]
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(

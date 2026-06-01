@@ -20,7 +20,7 @@ from typing import Awaitable, Callable
 from ...ports.notifier import Notifier
 from ..loop.scheduler import Scheduler
 from .digest import build_digest
-from .project import Project
+from .project import Blocker, Project
 
 
 @dataclass
@@ -88,6 +88,25 @@ class Portfolio:
         # Scheduler 결과의 '상태'만 흡수 (내용 아님 — 세부는 handoff 에)
         proj.pending_requests = list(getattr(sched, "pending_requests", []))
         proj.speculative_requests = list(getattr(sched, "speculative_requests", []))
+        # 매니저가 추출한 결정 필요 항목 → project.blockers (다이제스트의 '결정' 칸).
+        # 이게 없으면 라이브 다이제스트의 결정 칸이 영원히 빈다(이 PR 이 메우는 구멍).
+        # 핵심: '교체'가 아니라 '누적'이다. 실제 포트폴리오는 digest_interval(기본 14) 동안
+        # 여러 틱을 돌고, blocker 는 사람이 다이제스트에서 처리할 때까지 쌓여야 한다. 매 advance
+        # 마다 교체하면 일찍 뜬 결정이 디지스트 전에 증발한다. question 텍스트로 중복만 거른다.
+        # (raised 된 blocker 의 '해소/제거' 라이프사이클은 후속 과제 — 여기선 누적만.)
+        seen = {b.question for b in proj.blockers}
+        for b in getattr(ho, "blockers", []) or []:
+            q = b.get("question", "")
+            if q and q not in seen:
+                seen.add(q)
+                proj.blockers.append(
+                    Blocker(
+                        project_id=proj.id,
+                        question=q,
+                        leverage=int(b.get("leverage", 1) or 1),
+                        context=b.get("context", ""),
+                    )
+                )
         if getattr(ho, "status", None) == "done" and not proj.pending_requests:
             proj.status = "done"
 

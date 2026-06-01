@@ -26,6 +26,7 @@ from ...ports.retriever import Retriever
 from ...ports.thinker import Thinker
 from ...ports.worker import WorkerBackend, WorkResult, WorkSpec
 from ..manager.anticipation import anticipate
+from ..manager.blockers import derive_blockers
 from ..manager.director import Director
 from ..manager.synthesis import synthesize
 from ..manager.premise import (
@@ -62,6 +63,9 @@ class Scheduler:
     speculative_requests: list[str] = field(default_factory=list)
     # synthesis: 성공한 전제 갈래가 2개 이상이면 승자 하나를 골라 나머지는 기각한다.
     synthesize: bool = False
+    # 보고 후, 본부장이 결정해야 할 항목을 매니저가 추출해 handoff.blockers 에 쌓는다.
+    # Portfolio 가 이걸 읽어 단일 다이제스트의 '결정 필요' 칸을 채운다(기본 off).
+    surface_blockers: bool = False
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
 
@@ -121,6 +125,7 @@ class Scheduler:
         fresh.glossary = prev.glossary
         fresh.constraints = prev.constraints
         fresh.open_questions = prev.open_questions
+        fresh.blockers = getattr(prev, "blockers", [])
         # caller 가 큐를 명시하지 않았으면 이전 미완료 큐를 복원
         if not self.pending_requests and prev.pending_requests:
             self.pending_requests = list(prev.pending_requests)
@@ -235,6 +240,14 @@ class Scheduler:
                     pass
         summary = await to_premise_report(outcomes, self.thinker)
         report(summary)
+
+        # 실제 요청의 결과에서만 '본부장 결정 필요'를 추출해 handoff 에 쌓는다.
+        # (raw outcomes 를 근거로 — 압축된 보고가 아니라.)
+        if self.surface_blockers and not speculative:
+            bs = await derive_blockers(request, outcomes, self.thinker)
+            if bs:
+                ho.blockers.extend(bs)
+                ho.open_questions.extend(b["question"] for b in bs)  # 줄곧 비어있던 필드 채움
 
         # 실제 요청의 보고 후에만(예측의 예측 금지) 반응을 예측해 선제 작업을 큐에 쌓는다.
         if self.anticipate and not speculative:

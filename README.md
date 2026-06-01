@@ -178,7 +178,7 @@ python3 -m sophia --real --resume --goal "..."           # 같은 goal 의 hando
 
 ## 상태 — 검증된 것과 안 된 것
 
-**동작하는 코어 + 110개 테스트 통과.** 정직하게 경계를 적는다.
+**동작하는 코어 + 125개 테스트 통과.** 정직하게 경계를 적는다.
 
 검증됨:
 - `--real` 전체 경로가 pip 없이 end-to-end로 돈다 (claude-cli thinker → 전제 도출 →
@@ -193,15 +193,28 @@ python3 -m sophia --real --resume --goal "..."           # 같은 goal 의 hando
   다이제스트로 발행하는 전체 흐름 검증(오프라인). 한 프로젝트 실패가 포트폴리오를 안 죽임.
 - synthesis: 여러 전제 갈래 중 승자 하나를 근거와 함께 채택하고 나머지를 기각·graft.
   실제 claude 로 라이브 검증(cache-aside vs write-through → cache-aside 채택).
+- **세션 임포터**(`adapters/sessions.py`): `~/.claude/projects` 트랜스크립트를 읽어
+  cwd 별로 묶고 의도(goal)·이어갈 지점을 추출해 Project 로 만든다(읽기 전용, 단위 검증).
+- **포트폴리오 라이브 1개 주행**: 임포트 → 포트폴리오 → 실제 claude → 5문장 보고 →
+  다이제스트 경로를 실제 claude 로 end-to-end 확인(`scripts/portfolio_live.py`, 1개 프로젝트).
+- **blocker 표면화**(`manager/blockers.py`): 라이브 주행에서 *워커가 ok=True 로 성공해도
+  보고에 결정 요청을 남기면 다이제스트 '결정' 칸이 비는* 버그를 발견 → 매니저 레벨에서
+  결정 필요 항목만 추출해 `handoff.blockers`→`project.blockers`→다이제스트로 배선(단위 검증).
 
 아직 라이브로 **검증 안 됨 / 한계** (과신 금지):
-- **포트폴리오 라이브** — 오프라인(fake)까지만. 실제 claude 일꾼으로 N개 프로젝트 동시 주행 미검증.
+- **포트폴리오 라이브 — N개 동시** 미검증(1개 주행까지만). blocker 표면화는 단위 검증까지만
+  (라이브 재검증은 MCP 부작용 차단 후로 미룸 — 아래). 또한 blocker 는 틱마다 *누적*되지만
+  한 번 raised 되면 자동 *해소/제거* 되지 않는다(사람이 처리해도 큐에 남음 — 후속 과제).
+- **샌드박스 cwd 가 MCP 를 격리하지 못함**: 라이브 1개 주행에서 워커가 '읽기 전용' 지시를
+  무시하고 붙어있던 MCP 로 외부 부작용(노션 페이지 생성)을 냈다. cwd 격리는 파일시스템만
+  막는다 — MCP 경계는 별도 차단(툴 allowlist/--mcp 제거) 필요. 라이브 dogfood 전 선결 과제.
 - **anticipation 품질** — 메커니즘은 라이브로 돌지만 toy goal 로만 확인(내용 빈약 가능).
 - 6시간 무인 실행, SMTP 실전송, codex artifacts 추출, EmbeddingRetriever(pip 없음) — 미검증.
 
 ## 다음
 
-- 포트폴리오 라이브 검증 (실제 claude 로 N개 프로젝트 동시)
+- **MCP 경계 차단** — 워커 부작용을 cwd 가 못 막는다. 툴 allowlist/권한모드로 펜싱 후 라이브 재개.
+- 포트폴리오 라이브 — N개 프로젝트 동시(현재 1개까지). blocker 표면화 라이브 재검증(MCP 차단 후).
 - anticipation 품질·6시간 무인 주행·SMTP 실전송·codex artifacts·EmbeddingRetriever
 
 ---

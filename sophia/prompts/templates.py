@@ -87,6 +87,35 @@ SYNTHESIZE_SCHEMA = {
     "required": ["chosen_id", "rationale", "rejected"],
 }
 
+# 전제 결과 → 본부장이 '결정'해야 할 블로커만 추출 (다이제스트의 심장)
+# 사소한 건 관리자가 단정한다. 정말 사람만 정할 수 있는 것(방향 선택·승인·확인)만 올린다.
+BLOCKERS_DERIVE = (
+    "아래는 한 요청을 전제로 실행한 결과다. 관리자로서, 본부장(사용자)이 직접 "
+    "'결정'해야만 다음으로 갈 수 있는 항목이 있는지 가려내라. 네가 단정할 수 있는 "
+    "사소한 건 올리지 말고, 정말 사람만 정할 수 있는 것(방향 선택·승인·사실 확인)만 "
+    "골라라. 결정거리가 없으면 빈 배열을 반환하라. 각 항목에 leverage(1~5, 그 결정의 "
+    "파급/중요도)를 매겨라.\n\n원래 요청: {request}\n\n전제별 결과:\n{results}"
+)
+
+BLOCKERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "blockers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "본부장이 결정할 질문 한 줄"},
+                    "leverage": {"type": "integer", "description": "1~5, 결정의 파급/중요도"},
+                    "context": {"type": "string", "description": "결정에 필요한 짧은 맥락(선택)"},
+                },
+                "required": ["question", "leverage"],
+            },
+        }
+    },
+    "required": ["blockers"],
+}
+
 # 보고 후 → 사용자 반응 예측 → 선제 작업 (anticipation)
 ANTICIPATE = (
     "방금 본부장에게 아래 보고를 올렸다. 회신을 기다리는 동안 놀지 않는다.\n"
