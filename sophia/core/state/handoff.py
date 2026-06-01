@@ -53,6 +53,9 @@ class Handoff:
     commit_gates: list[dict[str, Any]] = field(default_factory=list)
     # 페이싱 베이스라인: 마지막 사람 접촉 시점의 카운트 스냅샷. 현재−이것 = 미검토 백로그.
     ack_baseline: dict[str, int] = field(default_factory=dict)
+    # 막힌 시점의 '최신 사람 세션 mtime'. 사람이 그 뒤로 프로젝트를 건드리면(세상이 움직이면)
+    # mtime 이 이걸 넘어 → 재실행. 그 전엔 워커 재실행 안 함(같은 벽 재도출·quota 낭비 방지).
+    blocked_mtime: float = 0.0
     # 6h 무인 실행에서 무한증가(메모리 누수) 방지용 상한. 오래된 것부터 버린다.
     max_items: int = 500
 

@@ -31,8 +31,10 @@ from sophia.adapters.sessions import import_projects  # noqa: E402
 from sophia.adapters.thinker.claude_cli import ClaudeCliThinker  # noqa: E402
 from sophia.core.loop.scheduler import Scheduler  # noqa: E402
 from sophia.core.manager.director import Director  # noqa: E402
+from sophia.core.portfolio.digest import build_digest  # noqa: E402
 from sophia.core.portfolio.portfolio import Portfolio  # noqa: E402
-from sophia.core.portfolio.project import Project  # noqa: E402
+from sophia.core.portfolio.project import Blocker, Project, should_skip_blocked  # noqa: E402
+from sophia.core.state.handoff import Handoff  # noqa: E402
 
 DIGEST_DIR = Path.home() / ".sophia" / "digests"
 HANDOFF_DIR = Path.home() / ".sophia" / "handoffs"
@@ -66,7 +68,24 @@ def _project_for(t) -> Project | None:
     p.goal = t.intent or t.note or Path(t.cwd).name
     p.meta["progress"] = t.progress
     p.meta["boundaries"] = t.boundaries
+    # 기존 핸드오프의 미결 blocker + 막힌 시점 mtime 을 불러온다(디스트 나열 + skip 판정용).
+    prior = _load_handoff(p.handoff_path)
+    p.meta["blocked_mtime"] = getattr(prior, "blocked_mtime", 0.0)
+    p.blockers = [
+        Blocker(project_id=p.id, question=b.get("question", ""),
+                leverage=int(b.get("leverage", 1) or 1), context=b.get("context", ""))
+        for b in (getattr(prior, "blockers", []) or []) if b.get("question")
+    ]
     return p
+
+
+def _load_handoff(path: str) -> Handoff | None:
+    try:
+        if Path(path).exists():
+            return Handoff.load(path)
+    except Exception:
+        pass
+    return None
 
 
 def _factory(p: Project):
@@ -113,25 +132,51 @@ def main() -> int:
     if u.ok:
         print(f"📊 사용량: 세션 {u.session_pct}% · 주간 {u.week_pct}% (mode={u.mode})")
         if args.max_week_pct is not None and (u.week_pct or 0) >= args.max_week_pct:
-            print(f"⛔ 주간 {u.week_pct}% ≥ 상한 {args.max_week_pct}% → 이번 라운드 건너뜀(자율작업 정지).")
+            print(f"⛔ 주간 {u.week_pct}% ≥ 상한 {args.max_week_pct}% → 이번 라운드 건너뜀.")
             return 0
     else:
         print(f"📊 사용량 읽기 실패(무시하고 진행). mode={u.mode}")
 
-    print(f"하루 라운드 — tracked {len(reg.items)}개 중 {len(projects)}개 주행(read_only):")
+    # run vs wait: 막혀 있고 사람이 그 뒤로 안 건드린 프로젝트는 워커 재실행 안 함(quota·재나그 방지).
+    run, wait = [], []
     for p in projects:
-        print(f"  [{p.id}] {p.meta['cwd']} · goal: {p.goal[:50]}")
+        if should_skip_blocked(len(p.blockers), p.meta["blocked_mtime"], p.meta["mtime"]):
+            p.status = "blocked"
+            wait.append(p)
+        else:
+            run.append(p)
 
-    notifier = _build_notifier(args.stamp)
+    print(f"하루 라운드 — tracked {len(projects)}개: 주행 {len(run)} · 대기(당신 차례) {len(wait)}")
+    for p in run:
+        print(f"  ▶ [{p.id}] {p.goal[:50]}")
+    for p in wait:
+        print(f"  ⏸ [{p.id}] 결정 대기 {len(p.blockers)}건 — 당신이 건드리면 재개")
+
     from sophia.adapters import telemetry
     telemetry.reset()
-    pf = Portfolio(projects=projects, scheduler_factory=_factory,
-                   notifier=notifier, digest_interval=len(projects),
-                   max_ticks=len(projects))
-    digests = asyncio.run(pf.run())
+    if run:
+        # 막힌 것 빼고 진행 가능한 것만 실제 워커 주행. (digest 내부발행 안 쓰고 아래서 합쳐 발행)
+        pf = Portfolio(projects=run, scheduler_factory=_factory,
+                       notifier=None, digest_interval=len(run), max_ticks=len(run))
+        asyncio.run(pf.run())
+        # 새로 막힌 프로젝트는 막힌 시점 mtime 을 핸드오프에 스탬프(다음 라운드 skip 기준).
+        for p in run:
+            if p.blockers:
+                ho = _load_handoff(p.handoff_path)
+                if ho is not None:
+                    ho.blocked_mtime = p.meta["mtime"]
+                    try:
+                        ho.save(p.handoff_path)
+                    except OSError:
+                        pass
     usd, calls = telemetry.snapshot()
-    print(f"\n발송 완료(이메일+파일). 다이제스트 {len(digests)}통. 파일: {DIGEST_DIR}")
-    print(f"💰 이 라운드 실비용: ${usd:.3f} ({calls} claude 호출)")
+
+    # 최종 단일 다이제스트 = 진행분 + 대기분의 미결 결정 전부(나열은 하되 재도출 안 함).
+    digest = build_digest(run + wait, now_tick=0)
+    notifier = _build_notifier(args.stamp)
+    notifier.send("[SOPHIA 다이제스트]", digest)
+    print("\n" + digest)
+    print(f"\n💰 이 라운드: ${usd:.3f} ({calls} claude 호출) · 파일 {DIGEST_DIR}")
     return 0
 
 

@@ -42,3 +42,19 @@ class Project:
     def staleness(self, now_tick: int) -> int:
         """마지막 전진 이후 경과한 틱 수. 클수록 '잊힌' 프로젝트."""
         return now_tick - self.last_progress_tick
+
+
+def should_skip_blocked(
+    n_open_blockers: int, blocked_mtime: float, latest_session_mtime: float
+) -> bool:
+    """막힌 프로젝트를 이번 라운드에 건너뛸지(워커 재실행 안 함).
+
+    철학: 부분의 막힘은 우회한다 — 사람 결정 대기 중인 프로젝트의 병목은 SOPHIA 가 아니라
+    사람이다. 그래서 '세상이 움직일'(사람이 그 프로젝트를 다시 건드릴) 때까지 워커를 다시
+    던지지 않는다. answer 를 타이핑받는 게 아니라 세션 mtime 으로 감지한다.
+
+    열린 blocker 가 없으면 돌린다. 있어도 사람이 막힌 뒤로 세션을 건드렸으면(mtime↑) 돌린다.
+    """
+    if n_open_blockers <= 0:
+        return False
+    return latest_session_mtime <= blocked_mtime
