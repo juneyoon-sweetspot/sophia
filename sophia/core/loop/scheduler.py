@@ -28,7 +28,7 @@ from ...ports.worker import WorkerBackend, WorkResult, WorkSpec
 from ..manager.anticipation import anticipate
 from ..manager.blockers import derive_blockers
 from ..manager.director import Director
-from ..manager.pacing import Pace, backlog_score, pace_for, snapshot_counts
+from ..manager.pacing import Pace, backlog_score, pace_for, quota_pressure, snapshot_counts
 from ..manager.synthesis import synthesize
 from ..manager.premise import (
     Premise,
@@ -69,6 +69,12 @@ class Scheduler:
     surface_blockers: bool = False
     # 페이싱: 미검토 백로그가 클수록 자율 탐색(분기·예측·투기)을 늦춘다. 사람 요청은 안 늦춤.
     pace: bool = False
+    # quota 페이싱: usage_reader()가 주간 % 를 주면(느려서 캐시) cap 에 가까울수록 함께 조인다.
+    usage_reader: Callable[[], "int | None"] | None = None
+    quota_cap_pct: int | None = None
+    usage_refresh_cycles: int = 20      # PTY 읽기가 느려 매 사이클 안 읽고 N 사이클마다
+    _week_pct: int | None = None
+    _usage_tick: int = 0
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
 
@@ -86,6 +92,7 @@ class Scheduler:
             if self.max_cycles is not None and cycles >= self.max_cycles:
                 break
             cycles += 1
+            self._refresh_usage(cycles)  # quota %(주기적·캐시)
 
             for ins in self.director.drain_insights():
                 report(surface_insight(ins))
@@ -181,13 +188,25 @@ class Scheduler:
     def _reset_baseline(self, ho: Handoff) -> None:
         ho.ack_baseline = self._counts(ho)
 
+    def _refresh_usage(self, cycles: int) -> None:
+        """주간 quota % 를 주기적으로(캐시) 갱신. PTY 읽기가 느려 매 사이클 안 한다."""
+        if not (self.pace and self.usage_reader):
+            return
+        if cycles == 1 or (self.usage_refresh_cycles
+                           and cycles % self.usage_refresh_cycles == 1):
+            try:
+                self._week_pct = self.usage_reader()
+            except Exception:
+                pass
+
     def _pace(self, ho: Handoff) -> Pace:
-        """미검토 백로그 → 자율 엔진 페이스. pace off 면 풀가동(기존 동작 불변)."""
+        """백로그 + quota 압력 → 자율 엔진 페이스. 둘 중 큰 쪽에 반응. pace off 면 풀가동."""
         if not self.pace:
             return Pace(self.premise_count, self.anticipation_width,
                         self.max_speculative, 1.0)
         b = backlog_score(self._counts(ho), ho.ack_baseline)
-        return pace_for(b, base_premise=self.premise_count,
+        q = quota_pressure(self._week_pct, self.quota_cap_pct)
+        return pace_for(max(b, q), base_premise=self.premise_count,
                         base_anticipation=self.anticipation_width,
                         base_speculative=self.max_speculative)
 

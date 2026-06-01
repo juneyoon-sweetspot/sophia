@@ -40,6 +40,21 @@ def backlog_score(counts: dict, baseline: dict | None = None) -> float:
     return GATED_WEIGHT * gated + UNRATIFIED_WEIGHT * unratified
 
 
+def quota_pressure(week_pct, cap_pct) -> float:
+    """주간 quota 사용률 → 백로그-등가 압력. cap 의 70% 미만이면 0, cap 에서 급증.
+
+    이걸 backlog 와 같은 단위로 환산해 pace_for 에 max() 로 합친다 — 두 압력(숙제 쌓임,
+    quota 소진) 중 큰 쪽에 반응. cap 에서 ~8(강한 throttle), 초과하면 그 이상.
+    """
+    if week_pct is None or not cap_pct or cap_pct <= 0:
+        return 0.0
+    floor = cap_pct * 0.7
+    if week_pct <= floor:
+        return 0.0
+    frac = (week_pct - floor) / max(1.0, cap_pct - floor)  # cap 에서 1.0
+    return frac * 8.0
+
+
 @dataclass
 class Pace:
     premise_count: int        # 자율 분기 폭(백로그↑ → ↓, 최소 1)

@@ -3,7 +3,12 @@ from sophia.adapters.fake_worker import FakeWorkerBackend
 from sophia.adapters.thinker.fake import FakeThinker
 from sophia.core.loop.scheduler import Scheduler
 from sophia.core.manager.director import Director
-from sophia.core.manager.pacing import backlog_score, pace_for, snapshot_counts
+from sophia.core.manager.pacing import (
+    backlog_score,
+    pace_for,
+    quota_pressure,
+    snapshot_counts,
+)
 from sophia.core.state.handoff import Handoff
 
 
@@ -71,6 +76,47 @@ def test_scheduler_pace_on_throttles_with_backlog():
     ho.blockers = [{"q": i} for i in range(8)]           # 베이스라인 0 → 백로그 8
     p = s._pace(ho)
     assert p.premise_count < 3 and p.idle_multiplier > 1.0
+
+
+# ---------- quota 압력 ----------
+
+def test_quota_pressure_zero_when_far_below_cap():
+    assert quota_pressure(20, 80) == 0.0       # 80 의 70%(56) 미만 → 압력 0
+    assert quota_pressure(None, 80) == 0.0     # 못 읽음 → 0
+    assert quota_pressure(50, None) == 0.0     # cap 없음 → 0
+
+
+def test_quota_pressure_rises_near_and_over_cap():
+    near = quota_pressure(70, 80)              # cap 의 70~100% 구간
+    at = quota_pressure(80, 80)                # cap 도달
+    over = quota_pressure(95, 80)              # 초과
+    assert 0 < near < at < over
+    assert at >= 7.0                           # cap 에서 강한 throttle(≈8)
+
+
+def test_scheduler_quota_throttles_even_with_zero_backlog():
+    s = Scheduler(
+        backend=FakeWorkerBackend(), director=Director(goal="g"), thinker=FakeThinker(),
+        goal="g", premise_count=3, anticipation_width=2, max_speculative=20,
+        pace=True, quota_cap_pct=80,
+    )
+    ho = Handoff(session_id="s", goal="g")     # 백로그 0
+    s._week_pct = 80                            # 근데 quota 가 cap
+    p = s._pace(ho)
+    assert p.premise_count < 3 and p.idle_multiplier > 1.0   # quota 만으로도 throttle
+
+
+def test_scheduler_usage_reader_caches_week_pct():
+    calls = []
+    s = Scheduler(
+        backend=FakeWorkerBackend(), director=Director(goal="g"), thinker=FakeThinker(),
+        goal="g", pace=True, usage_reader=lambda: (calls.append(1), 42)[1],
+        usage_refresh_cycles=20,
+    )
+    s._refresh_usage(1)                         # 첫 사이클 → 읽음
+    assert s._week_pct == 42 and len(calls) == 1
+    s._refresh_usage(2)                         # 갱신 주기 아님 → 안 읽음
+    assert len(calls) == 1
 
 
 def test_reset_baseline_zeroes_backlog():
