@@ -51,6 +51,8 @@ class Handoff:
     # 실행 전 승인이 필요한 비가역 커밋(2단계 게이트 phase1 산출). [{action, why}]
     # held 상태로 사람 승인을 기다린다. 승인 전엔 실행 안 함.
     commit_gates: list[dict[str, Any]] = field(default_factory=list)
+    # 페이싱 베이스라인: 마지막 사람 접촉 시점의 카운트 스냅샷. 현재−이것 = 미검토 백로그.
+    ack_baseline: dict[str, int] = field(default_factory=dict)
     # 6h 무인 실행에서 무한증가(메모리 누수) 방지용 상한. 오래된 것부터 버린다.
     max_items: int = 500
 

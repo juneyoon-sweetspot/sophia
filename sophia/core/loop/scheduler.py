@@ -28,6 +28,7 @@ from ...ports.worker import WorkerBackend, WorkResult, WorkSpec
 from ..manager.anticipation import anticipate
 from ..manager.blockers import derive_blockers
 from ..manager.director import Director
+from ..manager.pacing import Pace, backlog_score, pace_for, snapshot_counts
 from ..manager.synthesis import synthesize
 from ..manager.premise import (
     Premise,
@@ -66,6 +67,8 @@ class Scheduler:
     # 보고 후, 본부장이 결정해야 할 항목을 매니저가 추출해 handoff.blockers 에 쌓는다.
     # Portfolio 가 이걸 읽어 단일 다이제스트의 '결정 필요' 칸을 채운다(기본 off).
     surface_blockers: bool = False
+    # 페이싱: 미검토 백로그가 클수록 자율 탐색(분기·예측·투기)을 늦춘다. 사람 요청은 안 늦춤.
+    pace: bool = False
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
 
@@ -149,20 +152,44 @@ class Scheduler:
         우선순위: 실제 요청 → 예측(선제) 작업 → 자가 과업 → 큐 보충.
         실제 요청은 보고 후 예측을 낳고(depth-1), 예측 작업은 또 예측하지 않는다.
         """
+        pace = self._pace(ho)
         if self.pending_requests:
+            # 사람 요청 = 접촉 → 베이스라인 리셋(재서핑), 풀 폭으로 서빙(절대 안 늦춤).
+            self._reset_baseline(ho)
             await self._explore(
                 self.pending_requests.pop(0), ho, report, speculative=False
             )
         elif self.speculative_requests:
             await self._explore(
-                self.speculative_requests.pop(0), ho, report, speculative=True
+                self.speculative_requests.pop(0), ho, report, speculative=True,
+                premise_count=pace.premise_count,
             )
         elif (spec := self.director.next_task()) is not None:
             await self._single(spec, ho, report)
         else:
             added = await self.director.replenish(self.thinker)
             if not added and not self.director.has_work():
-                await self.sleep(self.idle_sleep_s)
+                await self.sleep(self.idle_sleep_s * pace.idle_multiplier)
+
+    def _counts(self, ho: Handoff) -> dict:
+        return snapshot_counts(
+            blockers=len(ho.blockers), commit_gates=len(ho.commit_gates),
+            decisions=len(ho.decisions), reports=len(ho.reports),
+            speculative=len(self.speculative_requests),
+        )
+
+    def _reset_baseline(self, ho: Handoff) -> None:
+        ho.ack_baseline = self._counts(ho)
+
+    def _pace(self, ho: Handoff) -> Pace:
+        """미검토 백로그 → 자율 엔진 페이스. pace off 면 풀가동(기존 동작 불변)."""
+        if not self.pace:
+            return Pace(self.premise_count, self.anticipation_width,
+                        self.max_speculative, 1.0)
+        b = backlog_score(self._counts(ho), ho.ack_baseline)
+        return pace_for(b, base_premise=self.premise_count,
+                        base_anticipation=self.anticipation_width,
+                        base_speculative=self.max_speculative)
 
     def _persisting_report(
         self, report: Callable[[str], None], ho: Handoff, start: float
@@ -194,10 +221,12 @@ class Scheduler:
             pass  # 디스크 문제로 6h 루프를 죽이지 않는다
 
     async def _explore(
-        self, request: str, ho: Handoff, report, speculative: bool = False
+        self, request: str, ho: Handoff, report, speculative: bool = False,
+        premise_count: int | None = None,
     ) -> None:
         """사용자 요청 → 전제 병렬 탐색. speculative=True 면 예측에서 파생된
-        선제 작업이라 추가 예측을 낳지 않는다(depth-1)."""
+        선제 작업이라 추가 예측을 낳지 않는다(depth-1). premise_count 로 분기 폭을
+        조절(페이싱이 투기 작업의 폭을 줄일 때). None 이면 기본값."""
         context = ""
         if self.retriever is not None:
             try:
@@ -206,7 +235,8 @@ class Scheduler:
             except Exception:
                 context = ""
 
-        premises = await derive_premises(request, self.thinker, self.premise_count)
+        n = premise_count if premise_count is not None else self.premise_count
+        premises = await derive_premises(request, self.thinker, n)
         # 리소스 거버너가 있으면 현재 부하로 동시 실행 수를 조인다(없으면 전부 동시).
         max_conc = None
         if self.governor is not None:
@@ -254,13 +284,19 @@ class Scheduler:
             await self._anticipate(summary, ho)
 
     async def _anticipate(self, report_summary: str, ho: Handoff) -> None:
-        """보고에 대한 예상 반응 → 선제 작업 생성. 상한까지만 큐에 추가."""
-        room = self.max_speculative - len(self.speculative_requests)
+        """보고에 대한 예상 반응 → 선제 작업 생성. 페이스에 따라 폭·상한을 조인다.
+
+        백로그가 높으면 anticipation_width 가 0 으로 떨어져 예측 자체를 멈춘다(폭주 차단).
+        """
+        pace = self._pace(ho)
+        if pace.anticipation_width <= 0:
+            return
+        room = pace.max_speculative - len(self.speculative_requests)
         if room <= 0:
             return
         try:
             tasks = await anticipate(
-                report_summary, self.goal, self.thinker, self.anticipation_width
+                report_summary, self.goal, self.thinker, pace.anticipation_width
             )
         except Exception:
             tasks = []
