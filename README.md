@@ -178,7 +178,7 @@ python3 -m sophia --real --resume --goal "..."           # 같은 goal 의 hando
 
 ## 상태 — 검증된 것과 안 된 것
 
-**동작하는 코어 + 125개 테스트 통과.** 정직하게 경계를 적는다.
+**동작하는 코어 + 128개 테스트 통과.** 정직하게 경계를 적는다.
 
 검증됨:
 - `--real` 전체 경로가 pip 없이 end-to-end로 돈다 (claude-cli thinker → 전제 도출 →
@@ -199,22 +199,29 @@ python3 -m sophia --real --resume --goal "..."           # 같은 goal 의 hando
   다이제스트 경로를 실제 claude 로 end-to-end 확인(`scripts/portfolio_live.py`, 1개 프로젝트).
 - **blocker 표면화**(`manager/blockers.py`): 라이브 주행에서 *워커가 ok=True 로 성공해도
   보고에 결정 요청을 남기면 다이제스트 '결정' 칸이 비는* 버그를 발견 → 매니저 레벨에서
-  결정 필요 항목만 추출해 `handoff.blockers`→`project.blockers`→다이제스트로 배선(단위 검증).
+  결정 필요 항목만 추출해 `handoff.blockers`→`project.blockers`→다이제스트로 배선.
+  **라이브 검증됨**: 실제 워크스페이스(미문서 RAG 프로젝트)를 읽고 다이제스트 '결정' 칸이
+  leverage 순 2건으로 실제 채워짐(대상 확인 질문 + .env 평문 키 노출 경고).
+- **워커 read_only 펜스**(`adapters/claude_code`): `--permission-mode plan`+`--strict-mcp-config`
+  로 파일 쓰기·실행·MCP 를 차단. 라이브 검증됨 — 실제 프로젝트 cwd 에서 돌려도 파일 변경 0,
+  MCP 부작용 0, 그러면서 실제 파일을 읽어 고품질 분석.
 
 아직 라이브로 **검증 안 됨 / 한계** (과신 금지):
-- **포트폴리오 라이브 — N개 동시** 미검증(1개 주행까지만). blocker 표면화는 단위 검증까지만
-  (라이브 재검증은 MCP 부작용 차단 후로 미룸 — 아래). 또한 blocker 는 틱마다 *누적*되지만
+- **포트폴리오 라이브 — N개 동시** 미검증(1개 주행까지만). blocker 는 틱마다 *누적*되지만
   한 번 raised 되면 자동 *해소/제거* 되지 않는다(사람이 처리해도 큐에 남음 — 후속 과제).
-- **샌드박스 cwd 가 MCP 를 격리하지 못함**: 라이브 1개 주행에서 워커가 '읽기 전용' 지시를
-  무시하고 붙어있던 MCP 로 외부 부작용(노션 페이지 생성)을 냈다. cwd 격리는 파일시스템만
-  막는다 — MCP 경계는 별도 차단(툴 allowlist/--mcp 제거) 필요. 라이브 dogfood 전 선결 과제.
+- **MCP 부작용은 read_only opt-in 으로만 막힌다**: 기본 모드(read_only=False)의 워커는
+  여전히 붙어있는 MCP 로 외부 부작용을 낼 수 있다(첫 라이브 주행에서 워커가 cwd 격리를
+  무시하고 노션 페이지를 생성). cwd 격리는 파일시스템만 막는다 — 쓰기 작업이 필요한
+  라이브 dogfood 는 worktree 격리 + 명시적 MCP allowlist 설계가 더 필요하다.
 - **anticipation 품질** — 메커니즘은 라이브로 돌지만 toy goal 로만 확인(내용 빈약 가능).
 - 6시간 무인 실행, SMTP 실전송, codex artifacts 추출, EmbeddingRetriever(pip 없음) — 미검증.
 
 ## 다음
 
-- **MCP 경계 차단** — 워커 부작용을 cwd 가 못 막는다. 툴 allowlist/권한모드로 펜싱 후 라이브 재개.
-- 포트폴리오 라이브 — N개 프로젝트 동시(현재 1개까지). blocker 표면화 라이브 재검증(MCP 차단 후).
+- **쓰기 가능 라이브의 MCP 경계** — read_only 펜스는 분석엔 충분하나, 워커가 실제로
+  파일을 바꿔야 하는 dogfood 엔 worktree 격리 + 명시적 MCP allowlist 가 더 필요하다.
+- 포트폴리오 라이브 — N개 프로젝트 동시(현재 1개까지).
+- blocker 라이프사이클 — raised 된 결정의 해소/제거(지금은 누적만).
 - anticipation 품질·6시간 무인 주행·SMTP 실전송·codex artifacts·EmbeddingRetriever
 
 ---
