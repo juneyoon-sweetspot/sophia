@@ -76,6 +76,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--show", action="store_true", help="초안만 출력(에디터 안 열음)")
     ap.add_argument("--redraft", action="store_true", help="이미 브리프 있어도 재초안")
+    ap.add_argument("--save", action="store_true", help="에디터 없이 초안을 바로 저장")
     args = ap.parse_args()
 
     reg = Registry.load()
@@ -89,6 +90,14 @@ def main() -> int:
     if args.show:
         print(md)
         print("(--show: 저장 안 함. 에디터로 수정하려면 --show 빼고 실행)")
+        return 0
+
+    if args.save:
+        reg.save()
+        from sophia.adapters.registry import DEFAULT_PATH
+        print(f"초안 그대로 저장 → {DEFAULT_PATH}")
+        for t in reg.items:
+            print(f"  [{Path(t.cwd).name}] {t.intent[:55]}")
         return 0
 
     # 초안을 $EDITOR 로 열어 사람이 예외만 수정 → 다시 읽어 저장.

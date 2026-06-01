@@ -93,6 +93,8 @@ def _factory(p: Project):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stamp", default="", help="다이제스트 타임스탬프(로그용)")
+    ap.add_argument("--max-week-pct", type=int, default=None,
+                    help="주간 quota 사용률이 이 %% 이상이면 이번 라운드 건너뜀(자율작업 정지)")
     args = ap.parse_args()
 
     reg = Registry.load()
@@ -104,6 +106,17 @@ def main() -> int:
     if not projects:
         print("tracked cwd 에서 사람 세션을 못 찾음(전부 SOPHIA 세션이거나 비어있음).")
         return 1
+
+    # quota 확인(구독이면 세션/주간 %, API면 모드만). /usage PTY 스크랩.
+    from sophia.adapters.usage import read_usage
+    u = read_usage()
+    if u.ok:
+        print(f"📊 사용량: 세션 {u.session_pct}% · 주간 {u.week_pct}% (mode={u.mode})")
+        if args.max_week_pct is not None and (u.week_pct or 0) >= args.max_week_pct:
+            print(f"⛔ 주간 {u.week_pct}% ≥ 상한 {args.max_week_pct}% → 이번 라운드 건너뜀(자율작업 정지).")
+            return 0
+    else:
+        print(f"📊 사용량 읽기 실패(무시하고 진행). mode={u.mode}")
 
     print(f"하루 라운드 — tracked {len(reg.items)}개 중 {len(projects)}개 주행(read_only):")
     for p in projects:
