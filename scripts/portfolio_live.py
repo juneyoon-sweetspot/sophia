@@ -1,12 +1,11 @@
 """라이브 포트폴리오 1개 주행 — 기존 클로드 세션 임포트 → 실제 claude 워커.
 
-안전: 워커는 빈 샌드박스 cwd(/tmp/sophia_live)에서 돌고, 지시는 '분석만, 파일 수정
-금지'다. 실제 프로젝트 파일은 건드리지 않는다. (헤드리스 claude -p 는 기본 권한에서
-편집을 자동 거부하기도 하지만, 샌드박스 cwd + 읽기전용 지시로 이중으로 막는다.)
-
-목적: 임포터 → 포트폴리오 → 실제 claude → 5문장 보고 → 다이제스트 경로를 라이브로
-검증하고, 다이제스트의 '결정 필요' 칸이 라이브에서 어떻게 나오는지(빈-다이제스트 버그)
-직접 관찰한다.
+안전(개선판): 워커를 read_only(--permission-mode plan + --strict-mcp-config)로 펜싱한다.
+ - plan 모드: 파일 쓰기/편집/실행 차단(읽고 분석·계획만)
+ - strict-mcp-config: MCP 서버 0개 로드 → 외부 부작용(노션 등) 차단
+이 펜스 덕에 '실제 프로젝트 cwd'에서 돌려도 안전하다 — 워커가 진짜 파일·맥락을 읽어
+고품질 분석을 내되, 아무것도 못 바꾼다. (이전엔 빈 샌드박스라 워커가 엉뚱한 프로젝트를
+환각하고 MCP 로 노션 페이지를 만들었다 — cwd 격리는 MCP 를 못 막기 때문.)
 
   python3 scripts/portfolio_live.py --cwd /Users/juneyoon/Desktop/AX-Partners
 """
@@ -28,12 +27,10 @@ from sophia.core.loop.scheduler import Scheduler  # noqa: E402
 from sophia.core.manager.director import Director  # noqa: E402
 from sophia.core.portfolio.portfolio import Portfolio  # noqa: E402
 
-SANDBOX = "/tmp/sophia_live"
-
 READONLY_REQUEST = (
-    "아래는 한 프로젝트에서 사람이 마지막으로 남긴 지시다. 지금은 분석만 한다: "
-    "현재 작업이 어디까지 왔는지 추정하고, 다음 한 스텝이 무엇인지 제안하라. "
-    "절대 파일을 생성·수정하지 마라(읽기 전용). 막히면 사람에게 물을 재구성 질문 1개를 남겨라.\n\n"
+    "아래는 한 프로젝트에서 사람이 마지막으로 남긴 지시다. 지금은 분석만 한다(읽기 전용): "
+    "현재 작업이 어디까지 왔는지 실제 파일을 읽어 추정하고, 다음 한 스텝이 무엇인지 제안하라. "
+    "막히거나 사람 결정이 필요하면 재구성 질문 1개를 남겨라.\n\n"
     "프로젝트 목표: {goal}\n사람의 마지막 지시: {last}"
 )
 
@@ -41,7 +38,7 @@ READONLY_REQUEST = (
 def _factory(p):
     req = READONLY_REQUEST.format(goal=p.goal, last=(p.pending_requests or [""])[0])
     return Scheduler(
-        backend=ClaudeCodeBackend(base_repo=None),   # 샌드박스 cwd 상속(아래 chdir)
+        backend=ClaudeCodeBackend(read_only=True),    # plan + strict-mcp = 부작용 0
         director=Director(goal=p.goal),
         thinker=ClaudeCliThinker(),
         goal=p.goal,
@@ -69,9 +66,12 @@ def main() -> int:
     print(f"  마지막 지시: {p.pending_requests[0][:70]}")
     print(f"  세션 {p.meta['n_sessions']}개 · 누적 {p.meta['total_user_msgs']} 메시지\n")
 
-    Path(SANDBOX).mkdir(parents=True, exist_ok=True)
-    os.chdir(SANDBOX)  # 워커가 빈 샌드박스에서 돌게(실파일 격리)
-    print(f"워커 샌드박스 cwd = {SANDBOX} (실파일 격리)\n")
+    real_cwd = p.meta["cwd"]
+    if not Path(real_cwd).is_dir():
+        print(f"✗ cwd 가 존재하지 않음: {real_cwd}")
+        return 1
+    os.chdir(real_cwd)  # 실제 프로젝트에서 — read_only(plan+strict-mcp)로 안전
+    print(f"워커 cwd = {real_cwd} (read_only: 쓰기·MCP 차단)\n")
 
     pf = Portfolio(
         projects=[p],

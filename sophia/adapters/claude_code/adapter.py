@@ -33,11 +33,18 @@ class ClaudeCodeBackend(WorkerBackend):
         extra_args: list[str] | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         base_repo: str | None = None,
+        read_only: bool = False,
     ) -> None:
         self.claude_bin = claude_bin
         self.extra_args = extra_args or []
         self.timeout_s = timeout_s
         self.base_repo = base_repo  # git repo 면 worktree 격리 가능
+        # read_only: 워커를 '계획 모드 + MCP 미로드'로 펜싱한다.
+        #  - --permission-mode plan: 파일 쓰기/편집/실행 차단(읽고 분석·계획만)
+        #  - --strict-mcp-config(+--mcp-config 없음): MCP 서버 0개 → 외부 부작용 차단
+        # 라이브에서 cwd 격리가 MCP 부작용(예: 노션 페이지 생성)을 못 막은 걸 보고 추가.
+        # 이 모드면 '실제 프로젝트 cwd'에서 돌려도 안전 → 고품질 분석 + 부작용 0.
+        self.read_only = read_only
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
@@ -51,15 +58,7 @@ class ClaudeCodeBackend(WorkerBackend):
         if shutil.which(self.claude_bin) is None:
             return WorkResult(summary=f"'{self.claude_bin}' 실행파일을 찾을 수 없음", ok=False)
 
-        argv = [
-            self.claude_bin,
-            "-p",
-            self._compose_prompt(spec),
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            *self.extra_args,
-        ]
+        argv = self._build_argv(spec)
         # isolation=True 면 git worktree 로 격리 cwd 확보(불가 시 None=격리 안 함)
         repo = self.base_repo if spec.isolation else None
         async with worktree(repo, spec.premise_id or "task") as cwd:
@@ -98,6 +97,16 @@ class ClaudeCodeBackend(WorkerBackend):
             await asyncio.wait_for(proc.wait(), timeout=5)  # 좀비 reap
         except Exception:
             pass
+
+    def _build_argv(self, spec: WorkSpec) -> list[str]:
+        argv = [
+            self.claude_bin, "-p", self._compose_prompt(spec),
+            "--output-format", "stream-json", "--verbose",
+        ]
+        if self.read_only:  # 계획 모드 + MCP 미로드 = 파일·외부 부작용 차단
+            argv += ["--permission-mode", "plan", "--strict-mcp-config"]
+        argv += self.extra_args
+        return argv
 
     def _compose_prompt(self, spec: WorkSpec) -> str:
         if spec.context:

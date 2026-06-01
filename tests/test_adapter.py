@@ -64,3 +64,16 @@ def test_parse_stream_skips_non_json_lines():
 def test_default_timeout_is_not_six_hours():
     # 한 일꾼이 6h 전체 예산을 삼키지 못하도록 기본 타임아웃은 작아야 한다
     assert ClaudeCodeBackend().timeout_s <= 60 * 60
+
+
+def test_read_only_fences_plan_and_strict_mcp():
+    # read_only=True 면 plan 모드 + MCP 미로드 플래그가 argv 에 들어가야 한다
+    argv = ClaudeCodeBackend(read_only=True)._build_argv(WorkSpec(instruction="hi"))
+    assert "--permission-mode" in argv and argv[argv.index("--permission-mode") + 1] == "plan"
+    assert "--strict-mcp-config" in argv
+
+
+def test_default_is_not_read_only():
+    # 기본은 펜스 없음(하위호환). 부작용 차단은 명시적 opt-in.
+    argv = ClaudeCodeBackend()._build_argv(WorkSpec(instruction="hi"))
+    assert "--permission-mode" not in argv and "--strict-mcp-config" not in argv
