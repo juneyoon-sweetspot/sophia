@@ -1,12 +1,16 @@
 """세션 임포터 검증 — 합성 ~/.claude/projects fixture (실제 디스크/claude 무관)."""
+import asyncio
 import json
 
 from sophia.adapters.sessions import (
     group_by_cwd,
+    import_described,
     import_projects,
     read_session,
     scan_sessions,
+    summarize_session,
 )
+from sophia.adapters.thinker.fake import FakeThinker
 
 
 def _write_session(root, dirname, sid, cwd, user_texts, mtime=None):
@@ -91,3 +95,48 @@ def test_import_only_cwds_and_handoff_path(tmp_path):
     assert p.pending_requests == ["y"]          # 마지막 지시 = 이어갈 지점
     assert p.handoff_path == str(hd / "b.json")
     assert hd.exists()                          # handoff_dir 가 생성됨(조용한 저장실패 방지)
+
+
+# ---------- 고도화 임포트(세션 요약) ----------
+
+def test_read_session_collects_user_trace(tmp_path):
+    f = _write_session(tmp_path, "-p", "s", "/p", ["첫째", "둘째", "셋째"])
+    si = read_session(f)
+    assert si.user_trace == ["첫째", "둘째", "셋째"]
+    assert si.path.endswith("s.jsonl")
+
+
+def test_summarize_session_parses(tmp_path):
+    f = _write_session(tmp_path, "-p", "s", "/p", ["RAG 만들래", "임베딩 뭐 쓰지"])
+    si = read_session(f)
+    th = FakeThinker(script=[{"purpose": "사내 RAG 구축", "activity": "임베딩 선택 중",
+                              "kind": "active"}])
+    s = asyncio.run(summarize_session(si, th))
+    assert s == {"purpose": "사내 RAG 구축", "activity": "임베딩 선택 중", "kind": "active"}
+
+
+def test_summarize_session_thinker_error_falls_back(tmp_path):
+    f = _write_session(tmp_path, "-p", "s", "/p", ["뭔가 첫 지시", "그담"])
+    si = read_session(f)
+
+    class Boom(FakeThinker):
+        async def think(self, *a, **k):
+            raise RuntimeError("boom")
+    s = asyncio.run(summarize_session(si, Boom()))
+    assert s["kind"] == "unknown" and s["purpose"].startswith("뭔가 첫 지시")
+
+
+def test_import_described_sets_goal_and_drops_one_off(tmp_path):
+    _write_session(tmp_path, "-act", "s", "/act", ["진행 프로젝트", "계속"], mtime=2000)
+    _write_session(tmp_path, "-oneoff", "s", "/oneoff", ["이 레포 확인해봐"], mtime=1000)
+    # FakeThinker script 는 호출 순서대로 — 정렬(recency)상 /act 먼저, /oneoff 다음.
+    th = FakeThinker(script=[
+        {"purpose": "활성 작업", "activity": "구현 중", "kind": "active"},
+        {"purpose": "한 번 봄", "activity": "리뷰", "kind": "one_off"},
+    ])
+    ps = asyncio.run(import_described(
+        th, tmp_path, rank="recency", min_user_msgs=1, drop_one_off=True,
+        handoff_dir=tmp_path / "ho"))
+    assert [p.meta["cwd"] for p in ps] == ["/act"]      # one_off 제외됨
+    assert ps[0].goal == "활성 작업 — 구현 중"             # goal = 목적 — 활동
+    assert ps[0].meta["kind"] == "active"

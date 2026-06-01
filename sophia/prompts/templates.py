@@ -143,6 +143,33 @@ ANTICIPATE_SCHEMA = {
     "required": ["anticipations"],
 }
 
+# 기존 클로드 세션 궤적 → '무엇을 위해 무슨 일을 하던 세션인지' 요약 (임포트 고도화)
+# 첫 user 메시지를 goal 로 쓰면 "이 프로젝트 확인해봐" 같은 게 박혀 사람이 못 알아본다.
+# user 메시지 궤적을 읽어 목적/한 일/종류(이어가는 active vs 한 번 둘러본 one-off)를 뽑는다.
+SESSION_SUMMARIZE = (
+    "아래는 한 작업 디렉토리에서 사용자가 클로드와 나눈 user 메시지들(시간순)이다. "
+    "이 사용자가 '무엇을 위해(목적) 무슨 일을(활동) 하고 있었는지' 한 줄씩으로 요약하라. "
+    "그리고 이게 사용자가 *이어서 진행 중인 프로젝트(active)*인지, *한 번 둘러보고 만 "
+    "일회성 탐색(one_off)*인지 판정하라(여러 세션·되돌아온 흔적·구체적 산출물 요구가 "
+    "있으면 active, 단발성 질문·확인 요청이면 one_off).\n\n"
+    "디렉토리: {cwd}\n세션 수: {n_sessions} · 누적 메시지: {total_msgs}\n\n"
+    "user 메시지 궤적:\n{trace}"
+)
+
+SESSION_SUMMARIZE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "purpose": {"type": "string", "description": "무엇을 위해(목적) 한 줄"},
+        "activity": {"type": "string", "description": "무슨 일을(활동) 한 줄"},
+        "kind": {
+            "type": "string",
+            "enum": ["active", "one_off", "unknown"],
+            "description": "이어서 진행 중(active) vs 한 번 둘러본 일회성(one_off)",
+        },
+    },
+    "required": ["purpose", "activity", "kind"],
+}
+
 # idle → 자가 과업 제안
 IDLE_PROPOSE = (
     "지금 할당된 작업이 없다. 팀장으로서 지금 진행 중인 목표('{goal}')에 도움이 될 "

@@ -27,6 +27,9 @@ DEFAULT_ROOT = Path.home() / ".claude" / "projects"
 _NOISE_PREFIXES = ("<", "[Request interrupted", "Caveat:", "/")
 
 
+MAX_TRACE = 30  # 요약에 넘길 user 메시지 궤적 상한(프롬프트 폭주 방지)
+
+
 @dataclass
 class SessionInfo:
     """한 세션 트랜스크립트에서 뽑은 요약(임포트 판단/표시용)."""
@@ -36,6 +39,8 @@ class SessionInfo:
     last_user_text: str
     mtime: float
     n_user_msgs: int
+    path: str = ""                                    # 트랜스크립트 파일 경로
+    user_trace: list[str] = field(default_factory=list)  # user 메시지 궤적(요약용, 상한)
 
 
 def _user_texts(path: Path):
@@ -78,6 +83,7 @@ def read_session(path: str | Path) -> SessionInfo | None:
     cwd = ""
     first = last = None
     n = 0
+    trace: list[str] = []
     for c, txt in _user_texts(path):
         n += 1
         if not cwd and c:
@@ -85,15 +91,21 @@ def read_session(path: str | Path) -> SessionInfo | None:
         if first is None:
             first = txt
         last = txt
+        trace.append(txt)
     if first is None:
         return None
     try:
         mtime = os.stat(path).st_mtime
     except OSError:
         mtime = 0.0
+    # 궤적 상한: 앞(시작 의도) + 뒤(최근 방향)를 보존하고 가운데를 자른다.
+    if len(trace) > MAX_TRACE:
+        head, tail = MAX_TRACE * 2 // 3, MAX_TRACE // 3
+        trace = trace[:head] + trace[-tail:]
     return SessionInfo(
         cwd=cwd, session_id=path.stem, first_user_text=first,
         last_user_text=last or first, mtime=mtime, n_user_msgs=n,
+        path=str(path), user_trace=trace,
     )
 
 
@@ -109,6 +121,38 @@ def scan_sessions(root: str | Path = DEFAULT_ROOT) -> list[SessionInfo]:
             out.append(si)
     out.sort(key=lambda s: s.mtime, reverse=True)
     return out
+
+
+async def summarize_session(si: "SessionInfo", thinker, group=None) -> dict:
+    """세션 궤적 → {purpose, activity, kind}. thinker 실패 시 안전 폴백.
+
+    임포트 고도화: 첫 메시지를 goal 로 쓰는 대신, user 궤적을 작은 모델이 읽어
+    '무엇을 위해 무슨 일을 하던 세션인지' + active/one_off 종류를 뽑는다.
+    """
+    from ..prompts import templates  # 지연 import (adapters→prompts 순환 회피)
+
+    trace = "\n".join(f"- {t}" for t in (si.user_trace or [si.first_user_text]))
+    n_sessions = getattr(group, "n_sessions", 1)
+    total = getattr(group, "total_user_msgs", si.n_user_msgs)
+    try:
+        out = await thinker.think(
+            templates.SESSION_SUMMARIZE.format(
+                cwd=si.cwd, n_sessions=n_sessions, total_msgs=total, trace=trace
+            ),
+            system=templates.SYSTEM_MANAGER,
+            schema=templates.SESSION_SUMMARIZE_SCHEMA,
+        )
+        if isinstance(out, dict) and out.get("purpose"):
+            kind = out.get("kind", "unknown")
+            return {
+                "purpose": str(out.get("purpose", "")).strip(),
+                "activity": str(out.get("activity", "")).strip(),
+                "kind": kind if kind in ("active", "one_off", "unknown") else "unknown",
+            }
+    except Exception:
+        pass
+    # 폴백: 요약 없이 첫 지시만(고도화 실패해도 임포트는 산다)
+    return {"purpose": si.first_user_text[:80], "activity": "", "kind": "unknown"}
 
 
 def _slug(cwd: str) -> str:
@@ -198,6 +242,67 @@ def import_projects(
                     "n_sessions": g.n_sessions,
                     "total_user_msgs": g.total_user_msgs,
                     "mtime": si.mtime,
+                },
+            )
+        )
+    return projects
+
+
+async def import_described(
+    thinker,
+    root: str | Path = DEFAULT_ROOT,
+    *,
+    min_user_msgs: int = 2,
+    exclude_cwds: set[str] | None = None,
+    only_cwds: set[str] | None = None,
+    rank: str = "recency",
+    top: int | None = None,
+    handoff_dir: str | Path = "/tmp/sophia_sessions",
+    drop_one_off: bool = False,
+) -> list[Project]:
+    """고도화 임포트: 각 프로젝트 최신 세션을 요약해 goal=목적·활동, meta=종류로 채운다.
+
+    첫 user 메시지를 goal 로 쓰던 한계를 메운다 — 사람이 '이게 뭐였지'를 알아보게.
+    drop_one_off=True 면 일회성 탐색(one_off)으로 판정된 cwd 를 포트폴리오에서 뺀다(큐레이션).
+    """
+    import asyncio
+
+    groups = group_by_cwd(root, exclude_cwds=exclude_cwds)
+    if only_cwds is not None:
+        groups = [g for g in groups if g.cwd in only_cwds]
+    groups = [g for g in groups if g.total_user_msgs >= min_user_msgs]
+    key = (lambda g: g.total_user_msgs) if rank == "usage" else (lambda g: g.latest.mtime)
+    groups.sort(key=key, reverse=True)
+    if top is not None:
+        groups = groups[:top]
+
+    summaries = await asyncio.gather(
+        *(summarize_session(g.latest, thinker, group=g) for g in groups)
+    )
+
+    handoff_dir = Path(handoff_dir)
+    handoff_dir.mkdir(parents=True, exist_ok=True)
+    projects: list[Project] = []
+    for g, s in zip(groups, summaries):
+        if drop_one_off and s.get("kind") == "one_off":
+            continue
+        si = g.latest
+        goal = s["purpose"] + (f" — {s['activity']}" if s.get("activity") else "")
+        projects.append(
+            Project(
+                id=_slug(g.cwd),
+                goal=goal or si.first_user_text,
+                handoff_path=str(handoff_dir / f"{_slug(g.cwd)}.json"),
+                pending_requests=[si.last_user_text],
+                meta={
+                    "cwd": g.cwd,
+                    "last_session": si.session_id,
+                    "n_sessions": g.n_sessions,
+                    "total_user_msgs": g.total_user_msgs,
+                    "mtime": si.mtime,
+                    "purpose": s.get("purpose", ""),
+                    "activity": s.get("activity", ""),
+                    "kind": s.get("kind", "unknown"),
                 },
             )
         )
