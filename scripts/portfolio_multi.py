@@ -83,8 +83,12 @@ def main() -> int:
         digest_interval=len(projects),   # 모두 1스텝 돈 뒤 '한 통' 발행
         max_ticks=len(projects),
     )
+    from sophia.adapters import telemetry  # noqa: E402
+    telemetry.reset()
     print("=== 주행 시작 ===\n")
     digests = asyncio.run(pf.run())
+    usd, calls = telemetry.snapshot()
+    print(f"\n💰 실비용 이 라운드: ${usd:.3f} ({calls} claude 호출)")
 
     print("\n" + "=" * 70)
     print("=== 최종 단일 다이제스트 (본부장이 받는 '한 통') ===")

@@ -144,6 +144,8 @@ class ClaudeCodeBackend(WorkerBackend):
             if t == "result":
                 result_text = ev.get("result", "") or result_text
                 is_error = bool(ev.get("is_error", False))
+                from .. import telemetry  # 비용 합산(있으면)
+                telemetry.add(ev.get("total_cost_usd"))
             elif t == "assistant":
                 # message.content 의 text/tool_use 블록 수집
                 msg = ev.get("message", {})

@@ -105,6 +105,8 @@ class ClaudeCliThinker(Thinker):
             if isinstance(env, dict) and "result" in env:
                 if env.get("is_error"):
                     raise RuntimeError(f"claude is_error: {env.get('result')}")
+                from .. import telemetry  # 비용 합산(있으면)
+                telemetry.add(env.get("total_cost_usd"))
                 return env.get("result") or ""
         except json.JSONDecodeError:
             pass

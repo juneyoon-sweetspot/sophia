@@ -77,3 +77,22 @@ def test_default_is_not_read_only():
     # 기본은 펜스 없음(하위호환). 부작용 차단은 명시적 opt-in.
     argv = ClaudeCodeBackend()._build_argv(WorkSpec(instruction="hi"))
     assert "--permission-mode" not in argv and "--strict-mcp-config" not in argv
+
+
+def test_parse_captures_cost_into_telemetry():
+    from sophia.adapters import telemetry
+    telemetry.reset()
+    backend = ClaudeCodeBackend()
+    backend._parse([{"type": "result", "result": "ok", "total_cost_usd": 0.42}], returncode=0)
+    usd, calls = telemetry.snapshot()
+    assert round(usd, 2) == 0.42 and calls == 1
+    telemetry.reset()
+
+
+def test_telemetry_add_ignores_nonpositive():
+    from sophia.adapters import telemetry
+    telemetry.reset()
+    telemetry.add(None); telemetry.add(0); telemetry.add(-1); telemetry.add(0.1)
+    usd, calls = telemetry.snapshot()
+    assert round(usd, 2) == 0.10 and calls == 1
+    telemetry.reset()

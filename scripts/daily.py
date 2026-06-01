@@ -103,11 +103,15 @@ def main() -> int:
         print(f"  [{p.id}] {p.meta['cwd']} · goal: {p.goal[:50]}")
 
     notifier = _build_notifier(args.stamp)
+    from sophia.adapters import telemetry
+    telemetry.reset()
     pf = Portfolio(projects=projects, scheduler_factory=_factory,
                    notifier=notifier, digest_interval=len(projects),
                    max_ticks=len(projects))
     digests = asyncio.run(pf.run())
+    usd, calls = telemetry.snapshot()
     print(f"\n발송 완료(이메일+파일). 다이제스트 {len(digests)}통. 파일: {DIGEST_DIR}")
+    print(f"💰 이 라운드 실비용: ${usd:.3f} ({calls} claude 호출)")
     return 0
 
 
