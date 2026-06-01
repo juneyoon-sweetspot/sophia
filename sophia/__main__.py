@@ -110,6 +110,7 @@ back in 5 sentences — so you manage, not micromanage.
 QUICK START
   sophia demo                 Run an offline demo (no API key, no claude needed)
   sophia tui                  Open the portfolio dashboard (TUI)
+  sophia track                Pick which of your past sessions to manage (interactive)
   sophia run "<your goal>"    Delegate a real goal to claude/codex workers
   sophia --help               Full options
 
@@ -140,11 +141,16 @@ def main() -> None:
         print(WELCOME)
         return
 
-    # 서브커맨드: tui / demo / run
+    # 서브커맨드: tui / demo / run / track
     cmd = argv[0]
     if cmd == "tui":
         from .ui.tui import main as tui_main
         tui_main()
+        return
+    if cmd == "track":
+        # 인터랙티브 피커로 '내 프로젝트' 고르기(경로 타이핑 없이 토글).
+        from .ui.picker import main as picker_main
+        picker_main()
         return
     if cmd == "demo":
         print("• Running offline demo (no API key needed)…\n")
