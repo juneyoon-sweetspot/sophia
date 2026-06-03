@@ -58,3 +58,22 @@ def should_skip_blocked(
     if n_open_blockers <= 0:
         return False
     return latest_session_mtime <= blocked_mtime
+
+
+def project_mode(
+    n_open_blockers: int, blocked_mtime: float, groundwork_mtime: float,
+    latest_session_mtime: float,
+) -> str:
+    """라운드마다 그 프로젝트의 행동: 'progress' | 'groundwork' | 'quiet'.
+
+    - progress  : 안 막혔거나 사람이 건드림(세상이 움직임) → 진전 + 결정 목록 replace(청소).
+    - groundwork: 막힘 + 미접촉 + 이 block 에 아직 밑작업 안 함 → 한 번 알아서 밑작업.
+    - quiet     : 막힘 + 미접촉 + 이미 밑작업함 → 조용히 대기($0, 또 안 파헤침).
+    """
+    if n_open_blockers <= 0:
+        return "progress"
+    if latest_session_mtime > blocked_mtime:   # 사람이 건드림 → 진전(replace)
+        return "progress"
+    if groundwork_mtime > 0 and groundwork_mtime >= blocked_mtime:  # 이미 밑작업함
+        return "quiet"
+    return "groundwork"                          # 막힘, 아직 밑작업 안 함 → 한 번

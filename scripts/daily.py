@@ -33,7 +33,7 @@ from sophia.core.manager.director import Director  # noqa: E402
 from sophia.core.manager.pacing import daily_budget_state  # noqa: E402
 from sophia.core.portfolio.digest import build_digest  # noqa: E402
 from sophia.core.portfolio.portfolio import Portfolio  # noqa: E402
-from sophia.core.portfolio.project import Blocker, Project, should_skip_blocked  # noqa: E402
+from sophia.core.portfolio.project import Blocker, Project, project_mode  # noqa: E402
 from sophia.core.state.handoff import Handoff  # noqa: E402
 
 DIGEST_DIR = Path.home() / ".sophia" / "digests"
@@ -87,6 +87,7 @@ def _project_for(t) -> Project | None:
     p.meta["boundaries"] = t.boundaries or "(없음)"
     prior = _load_handoff(p.handoff_path)
     p.meta["blocked_mtime"] = getattr(prior, "blocked_mtime", 0.0)
+    p.meta["groundwork_mtime"] = getattr(prior, "groundwork_mtime", 0.0)
     p.blockers = [
         Blocker(project_id=p.id, question=b.get("question", ""),
                 leverage=int(b.get("leverage", 1) or 1), context=b.get("context", ""))
@@ -153,42 +154,64 @@ def main() -> int:
     else:
         print(f"📊 사용량 읽기 실패(예산 게이트 생략). mode={u.mode}")
 
-    # 모드 결정: 막힘+미접촉 → groundwork(우회), 그 외 → readonly(진전).
+    from sophia.adapters import telemetry
+    telemetry.reset()
+
+    if over_budget:
+        # 예산 소진/하드천장: 아무것도 돌리지 않음(결정도 안 비움). 결정 목록만 보고.
+        print("⛔ 오늘 quota 예산 소진 → 워커 대기. 결정 목록만 보고(다음 날/관여 시 재개).")
+        digest = build_digest(projects, now_tick=0)
+        _build_notifier(args.stamp).send("[SOPHIA 다이제스트]", digest)
+        print("\n" + digest)
+        return 0
+
+    # 모드 결정: progress(진전+청소) / groundwork(한 번 밑작업) / quiet(이미 함→조용).
     for p in projects:
-        if should_skip_blocked(len(p.blockers), p.meta["blocked_mtime"], p.meta["mtime"]):
-            p.meta["mode"] = "groundwork"
-            p.meta["request"] = GROUNDWORK_REQUEST.format(
-                intent=p.goal, progress=p.meta["progress"], boundaries=p.meta["boundaries"],
-                open="; ".join(b.question for b in p.blockers)[:300] or "(없음)")
-        else:
-            p.meta["mode"] = "readonly"
+        mode = project_mode(len(p.blockers), p.meta["blocked_mtime"],
+                            p.meta["groundwork_mtime"], p.meta["mtime"])
+        p.meta["mode"] = mode
+        if mode == "progress":
+            # ⒜ replace: 사람이 만졌으니 옛 결정 비우고 fresh 가 새로 정의(stale 청소).
+            p.blockers = []
+            ho = _load_handoff(p.handoff_path)
+            if ho is not None:
+                ho.blockers = []
+                try:
+                    ho.save(p.handoff_path)
+                except OSError:
+                    pass
             p.meta["request"] = READONLY_REQUEST.format(
                 intent=p.goal, progress=p.meta["progress"], boundaries=p.meta["boundaries"],
                 last=(p.pending_requests or [""])[0])
+        elif mode == "groundwork":
+            p.meta["request"] = GROUNDWORK_REQUEST.format(
+                intent=p.goal, progress=p.meta["progress"], boundaries=p.meta["boundaries"],
+                open="; ".join(b.question for b in p.blockers)[:300] or "(없음)")
 
-    from sophia.adapters import telemetry
-    telemetry.reset()
-    if over_budget:
-        print("⛔ 오늘 quota 예산 소진 → 워커 대기. 결정 목록만 보고(다음 날/관여 시 재개).")
-    else:
-        rw = sum(1 for p in projects if p.meta["mode"] == "readonly")
-        gw = len(projects) - rw
-        print(f"하루 라운드 — 진전 {rw} · 우회(밑작업) {gw}")
-        for p in projects:
-            tag = "▶진전" if p.meta["mode"] == "readonly" else "↳밑작업"
-            print(f"  {tag} [{p.id}] {p.goal[:46]}")
-        pf = Portfolio(projects=projects, scheduler_factory=_factory,
-                       notifier=None, digest_interval=len(projects), max_ticks=len(projects))
+    run_list = [p for p in projects if p.meta["mode"] in ("progress", "groundwork")]
+    quiet = [p for p in projects if p.meta["mode"] == "quiet"]
+    pr = sum(1 for p in run_list if p.meta["mode"] == "progress")
+    print(f"하루 라운드 — 진전 {pr} · 밑작업 {len(run_list)-pr} · 조용(이미 밑작업·미접촉) {len(quiet)}")
+    for p in run_list:
+        print(f"  {'▶진전' if p.meta['mode']=='progress' else '↳밑작업'} [{p.id}] {p.goal[:44]}")
+    for p in quiet:
+        print(f"  ·조용 [{p.id}] 결정 대기 {len(p.blockers)}건 — 만지면 재개")
+
+    if run_list:
+        pf = Portfolio(projects=run_list, scheduler_factory=_factory,
+                       notifier=None, digest_interval=len(run_list), max_ticks=len(run_list))
         asyncio.run(pf.run())
-        for p in projects:
-            if p.blockers:  # 막힌 시점 mtime 스탬프(다음 라운드 우회/진전 판정 기준)
-                ho = _load_handoff(p.handoff_path)
-                if ho is not None:
-                    ho.blocked_mtime = p.meta["mtime"]
-                    try:
-                        ho.save(p.handoff_path)
-                    except OSError:
-                        pass
+        for p in run_list:
+            ho = _load_handoff(p.handoff_path)
+            if ho is None:
+                continue
+            if p.blockers:  # 막힌 시점 스탬프 + 밑작업 여부 표시(다음 라운드 판정)
+                ho.blocked_mtime = p.meta["mtime"]
+                ho.groundwork_mtime = p.meta["mtime"] if p.meta["mode"] == "groundwork" else 0.0
+                try:
+                    ho.save(p.handoff_path)
+                except OSError:
+                    pass
     usd, calls = telemetry.snapshot()
 
     digest = build_digest(projects, now_tick=0)
