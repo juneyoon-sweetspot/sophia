@@ -21,6 +21,7 @@ class Row:
     purpose: str = ""        # e 로 요약하면 채워짐
     activity: str = ""
     kind: str = ""           # active | one_off | unknown(요약 전 빈값)
+    cmux_name: str = ""      # cmux 탭 이름(사람이 단 것) — build_state 가 채움
 
     @property
     def cwd(self) -> str:
@@ -30,8 +31,8 @@ class Row:
     def label(self) -> str:
         if self.purpose:  # e 로 요약했으면 그게 최우선
             return self.purpose + (f" — {self.activity}" if self.activity else "")
-        # 요약 전엔 클로드 세션 제목(사람이 보는 rename 이름) → 없으면 첫 지시
-        return self.group.latest.title or self.group.latest.first_user_text
+        # 요약 전: cmux 탭 이름(사람 rename) > 클로드 aiTitle > 첫 지시
+        return self.cmux_name or self.group.latest.title or self.group.latest.first_user_text
 
 
 @dataclass
@@ -58,8 +59,12 @@ class PickerState:
 
 
 def build_state(groups: list[CwdGroup], registry: Registry) -> PickerState:
-    """후보 그룹 + 기존 레지스트리 → 피커 상태. 이미 tracked 면 체크 표시."""
-    rows = [Row(group=g, tracked=registry.is_tracked(g.cwd)) for g in groups]
+    """후보 그룹 + 기존 레지스트리 → 피커 상태. 이미 tracked 면 체크 표시.
+    cmux 탭 이름(사람이 단 것)을 cwd별로 붙인다(있으면 label 에서 우선)."""
+    from ..adapters.cmux import cwd_titles
+    cmux = cwd_titles()
+    rows = [Row(group=g, tracked=registry.is_tracked(g.cwd), cmux_name=cmux.get(g.cwd, ""))
+            for g in groups]
     return PickerState(rows=rows)
 
 
