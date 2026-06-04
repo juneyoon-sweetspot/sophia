@@ -97,7 +97,8 @@ def read_session(path: str | Path) -> SessionInfo | None:
     first = last = None
     n = 0
     trace: list[str] = []
-    title = ""
+    ai_title = ""
+    custom_title = ""   # /rename 으로 사람이 단 이름 (type=custom-title) — aiTitle 보다 우선
     try:
         fh = path.open(encoding="utf-8")
     except OSError:
@@ -113,7 +114,10 @@ def read_session(path: str | Path) -> SessionInfo | None:
                 continue
             t = d.get("type")
             if t == "ai-title" and d.get("aiTitle"):
-                title = str(d["aiTitle"]).strip()  # 마지막(최신) 제목이 이긴다
+                ai_title = str(d["aiTitle"]).strip()  # 마지막(최신) 자동 제목
+                continue
+            if t == "custom-title" and d.get("customTitle"):
+                custom_title = str(d["customTitle"]).strip()  # 사람이 /rename 한 이름
                 continue
             if t != "user":
                 continue
@@ -140,7 +144,8 @@ def read_session(path: str | Path) -> SessionInfo | None:
     return SessionInfo(
         cwd=cwd, session_id=path.stem, first_user_text=first,
         last_user_text=last or first, mtime=mtime, n_user_msgs=n,
-        path=str(path), user_trace=trace, title=title,
+        path=str(path), user_trace=trace,
+        title=custom_title or ai_title,   # /rename(사람) 우선, 없으면 aiTitle(자동)
     )
 
 

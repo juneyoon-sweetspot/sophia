@@ -66,9 +66,7 @@ ACTIVE_WINDOW_S = 3600  # 최근 1시간 내 사용 = 활성(당신이 작업 �
 
 def _candidates(tracked_cwds: set, limit: int = 30) -> list:
     """로컬 모든 사람 세션 → cwd별 묶어 최근순. 활성배지·tracked여부·이름.
-    이름 우선순위: cmux 탭 이름(사람이 단 것) > aiTitle > 첫 지시."""
-    from sophia.adapters.cmux import cwd_titles
-    cmux = cwd_titles()
+    이름 우선순위: 세션 제목(/rename 또는 aiTitle) > 첫 지시."""
     now = time.time()
     out = []
     for g in sorted(group_by_cwd(), key=lambda x: x.latest.mtime, reverse=True)[:limit]:
@@ -77,8 +75,7 @@ def _candidates(tracked_cwds: set, limit: int = 30) -> list:
             "cwd": g.cwd, "id": Path(g.cwd).name,
             "active": (now - si.mtime) < ACTIVE_WINDOW_S,
             "tracked": g.cwd in tracked_cwds,
-            "label": cmux.get(g.cwd) or si.title or si.first_user_text,
-            "msgs": g.total_user_msgs,
+            "label": si.title or si.first_user_text, "msgs": g.total_user_msgs,
         })
     return out
 

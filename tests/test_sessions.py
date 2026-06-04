@@ -156,3 +156,16 @@ def test_import_described_sets_goal_and_drops_one_off(tmp_path):
     assert [p.meta["cwd"] for p in ps] == ["/act"]      # one_off 제외됨
     assert ps[0].goal == "활성 작업 — 구현 중"             # goal = 목적 — 활동
     assert ps[0].meta["kind"] == "active"
+
+
+def test_read_session_prefers_custom_title_over_ai(tmp_path):
+    # /rename(custom-title)이 aiTitle 보다 우선
+    d = tmp_path / "-p"; d.mkdir()
+    f = d / "s.jsonl"
+    lines = [
+        {"type": "user", "cwd": "/p", "message": {"role": "user", "content": "뭐 좀 해"}},
+        {"type": "ai-title", "aiTitle": "Auto generated title"},
+        {"type": "custom-title", "customTitle": "내가 정한 이름"},
+    ]
+    f.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lines), encoding="utf-8")
+    assert read_session(f).title == "내가 정한 이름"
