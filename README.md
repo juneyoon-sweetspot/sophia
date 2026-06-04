@@ -176,6 +176,32 @@ python3 -m sophia --real --resume --goal "..."           # 같은 goal 의 hando
 `--thinker` 로 관리자 메타인지 백엔드를 고른다: 기본 `claude-cli`(pip 불필요),
 `anthropic`(SDK, `pip install -e ".[thinker]"`), `auto`(anthropic 우선·실패 시 폴백).
 
+### 밤샘 운영 — "켜두고 퇴근하면 밤새 돈다" (인간=낮, AI=밤)
+
+본부장의 실제 사용 모델: **컴퓨터를 켜둔 채(로그인된 채) 퇴근하면, SOPHIA가 밤새 방치
+프로젝트를 굴리고, 아침에 한 통의 다이제스트.** 먼저 관리할 프로젝트를 고르고(인터랙티브),
+세션 안에서 루프를 돌린다:
+
+```bash
+python3 -m sophia track                  # 내 프로젝트 고르기(↑↓·space·e 요약·s 저장)
+python3 scripts/brief.py                 # 각 프로젝트 의도 브리프(초안→수정)  [선택]
+nohup bash scripts/run-loop.sh start >> ~/.sophia/loop.log 2>&1 &   # 밤샘 시작(터미널 닫아도 유지)
+bash scripts/run-loop.sh status          # 상태
+bash scripts/run-loop.sh stop            # 중지
+```
+
+라운드마다: 막힌 프로젝트는 *밑작업으로 우회*(결정 다시 안 묻고 결정-독립 준비), 사람이
+건드린 건 *결정 목록 청소·갱신*, 이미 밑작업한 미접촉은 *조용*($0). 하루 quota 예산
+(`SOPHIA_DAILY_PCT`, 기본 20pp)을 다 쓰면 그제야 대기. 다이제스트는 `~/.sophia/digests/`
+(+ `gmail_setup.py` 로 메일).
+
+**왜 launchd 가 아니라 세션 루프인가 / 전제(중요):** 무인 launchd 는 claude 로그인 토큰
+(macOS login keychain)에 접근하려다 GUI 프롬프트에 막혀 hang 한다. 그래서 *당신이 로그인한
+세션 안*에서 돌려야 한다. 다음이 **유저 책임**(SOPHIA 가 못 보장):
+- 컴퓨터가 **안 꺼짐**(잠자기 끄기 / `caffeinate`) · **로그인 유지** · keychain 잠금 안 됨.
+- **재부팅·로그아웃하면 멈춤** → 다시 `run-loop.sh start`.
+- 전원을 끄거나 로그아웃해도 도는 *진짜 무인*은 구독 인증으론 불가 — `ANTHROPIC_API_KEY`($) 필요.
+
 ## 상태 — 검증된 것과 안 된 것
 
 **동작하는 코어 + 128개 테스트 통과.** 정직하게 경계를 적는다.

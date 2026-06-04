@@ -65,6 +65,7 @@ def read_usage(
     import select
     import signal
     import subprocess
+    import threading
     import time
 
     mode = detect_mode()
@@ -84,6 +85,17 @@ def read_usage(
     os.close(slave)
     buf = bytearray()
 
+    # 하드 데드라인 watchdog: PTY/claude 가 어디서든 stall 해도(밤샘 치명적) 데드라인에
+    # 프로세스그룹을 죽인다. 그러면 master 가 EOF 나서 pump/os.read 가 풀린다.
+    def _force_kill():
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+    watchdog = threading.Timer(boot_s + panel_s + 8.0, _force_kill)
+    watchdog.daemon = True
+    watchdog.start()
+
     def pump(secs: float) -> None:
         end = time.monotonic() + secs
         while time.monotonic() < end:
@@ -101,8 +113,13 @@ def read_usage(
     except OSError:
         pass
     finally:
+        watchdog.cancel()
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=3)  # 좀비 reap — 블록 안 되게 짧게
         except Exception:
             pass
         try:
