@@ -15,8 +15,11 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from datetime import date
 from pathlib import Path
+
+ACTIVE_WINDOW_S = 3600   # 최근 1시간 내 사용 = '활성'(당신이 작업 중) → SOPHIA 비켜줌
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -165,11 +168,15 @@ def main() -> int:
         print("\n" + digest)
         return 0
 
-    # 모드 결정: progress(진전+청소) / groundwork(한 번 밑작업) / quiet(이미 함→조용).
+    # 모드 결정: active(당신 작업 중→비켜줌) / progress / groundwork / quiet.
+    now = time.time()
     for p in projects:
+        is_active = (now - p.meta["mtime"]) < ACTIVE_WINDOW_S
         mode = project_mode(len(p.blockers), p.meta["blocked_mtime"],
-                            p.meta["groundwork_mtime"], p.meta["mtime"])
+                            p.meta["groundwork_mtime"], p.meta["mtime"], is_active=is_active)
         p.meta["mode"] = mode
+        if mode == "active":
+            continue   # 당신이 지금 작업 중 → request 안 만듦(run_list 제외), 디스트엔 나열
         if mode == "progress":
             # ⒜ replace: 사람이 만졌으니 옛 결정 비우고 fresh 가 새로 정의(stale 청소).
             p.blockers = []
@@ -190,10 +197,14 @@ def main() -> int:
 
     run_list = [p for p in projects if p.meta["mode"] in ("progress", "groundwork")]
     quiet = [p for p in projects if p.meta["mode"] == "quiet"]
+    active = [p for p in projects if p.meta["mode"] == "active"]
     pr = sum(1 for p in run_list if p.meta["mode"] == "progress")
-    print(f"하루 라운드 — 진전 {pr} · 밑작업 {len(run_list)-pr} · 조용(이미 밑작업·미접촉) {len(quiet)}")
+    print(f"하루 라운드 — 진전 {pr} · 밑작업 {len(run_list)-pr} · "
+          f"조용 {len(quiet)} · 작업중(비켜줌) {len(active)}")
     for p in run_list:
         print(f"  {'▶진전' if p.meta['mode']=='progress' else '↳밑작업'} [{p.id}] {p.goal[:44]}")
+    for p in active:
+        print(f"  🟢작업중 [{p.id}] — 당신이 작업 중이라 비켜줌(손 떼면 재개)")
     for p in quiet:
         print(f"  ·조용 [{p.id}] 결정 대기 {len(p.blockers)}건 — 만지면 재개")
 

@@ -62,14 +62,18 @@ def should_skip_blocked(
 
 def project_mode(
     n_open_blockers: int, blocked_mtime: float, groundwork_mtime: float,
-    latest_session_mtime: float,
+    latest_session_mtime: float, is_active: bool = False,
 ) -> str:
-    """라운드마다 그 프로젝트의 행동: 'progress' | 'groundwork' | 'quiet'.
+    """라운드마다 그 프로젝트의 행동: 'active' | 'progress' | 'groundwork' | 'quiet'.
 
+    - active    : 사람이 *지금* 작업 중(최근 사용) → SOPHIA 비켜줌(defer). 충돌 방지 +
+                  "낮=인간, 밤=AI": 당신이 손 떼면 그때 집는다.
     - progress  : 안 막혔거나 사람이 건드림(세상이 움직임) → 진전 + 결정 목록 replace(청소).
     - groundwork: 막힘 + 미접촉 + 이 block 에 아직 밑작업 안 함 → 한 번 알아서 밑작업.
     - quiet     : 막힘 + 미접촉 + 이미 밑작업함 → 조용히 대기($0, 또 안 파헤침).
     """
+    if is_active:           # 당신이 지금 그 안에 있다 → 무조건 비켜줌
+        return "active"
     if n_open_blockers <= 0:
         return "progress"
     if latest_session_mtime > blocked_mtime:   # 사람이 건드림 → 진전(replace)

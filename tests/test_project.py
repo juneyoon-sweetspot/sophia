@@ -42,3 +42,10 @@ def test_mode_cycle_progress_resets_groundwork():
     # 사람이 건드린 뒤(새 block, gw 리셋되면) 다시 밑작업 한 번 가능
     # (daily 가 progress 후 gw=0 으로 스탬프 → 다음 막히면 groundwork)
     assert project_mode(2, blocked_mtime=200, groundwork_mtime=0, latest_session_mtime=200) == "groundwork"
+
+
+def test_mode_active_defers_regardless():
+    # 당신이 지금 작업 중(is_active) → 막혔든 아니든 비켜줌
+    assert project_mode(0, 0, 0, 999, is_active=True) == "active"
+    assert project_mode(5, 100, 100, 100, is_active=True) == "active"
+    assert project_mode(5, 100, 0, 100, is_active=False) == "groundwork"  # 비활성이면 평소대로

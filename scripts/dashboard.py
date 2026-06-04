@@ -12,6 +12,7 @@ import argparse
 import html
 import json
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -60,10 +61,30 @@ def _latest_digest() -> str:
     return text[idx:].strip() if idx != -1 else text[-2000:]
 
 
+ACTIVE_WINDOW_S = 3600  # 최근 1시간 내 사용 = 활성(당신이 작업 중)
+
+
+def _candidates(tracked_cwds: set, limit: int = 30) -> list:
+    """로컬 모든 사람 세션 → cwd별 묶어 최근순. 활성배지·tracked여부·제목."""
+    now = time.time()
+    out = []
+    for g in sorted(group_by_cwd(), key=lambda x: x.latest.mtime, reverse=True)[:limit]:
+        si = g.latest
+        out.append({
+            "cwd": g.cwd, "id": Path(g.cwd).name,
+            "active": (now - si.mtime) < ACTIVE_WINDOW_S,
+            "tracked": g.cwd in tracked_cwds,
+            "label": si.title or si.first_user_text, "msgs": g.total_user_msgs,
+        })
+    return out
+
+
 def gather() -> dict:
+    reg = Registry.load()
+    tracked_cwds = set(reg.cwds())
     latest_mtime = {g.cwd: g.latest.mtime for g in group_by_cwd()}
     projects = []
-    for t in Registry.load().items:
+    for t in reg.items:
         nm = Path(t.cwd).name
         hp = HANDOFF_DIR / f"{nm}.json"
         ho = Handoff.load(hp) if hp.exists() else None
@@ -79,6 +100,7 @@ def gather() -> dict:
     return {
         "loop": _loop_state(), "budget": _budget_state(),
         "projects": projects, "digest": _latest_digest(),
+        "candidates": _candidates(tracked_cwds),
     }
 
 
@@ -89,6 +111,20 @@ def render(state: dict) -> str:
     b = state["budget"]
     budget_line = (f"오늘({e(str(b.get('date','')))}) 시작 주간 {b.get('start_pct','?')}%"
                    if b else "예산 정보 없음")
+    # 세션 브라우저(최근순 · 활성배지 · 체크선택 → SOPHIA 가 굴릴 집합)
+    srows = []
+    for c in state.get("candidates", []):
+        dot = "🟢" if c["active"] else "·"
+        chk = "checked" if c["tracked"] else ""
+        note = " <span class=act>작업중</span>" if c["active"] else ""
+        srows.append(
+            f'<label class="srow"><input type="checkbox" name="cwd" value="{e(c["cwd"])}" {chk}>'
+            f' {dot} <b>{e(c["id"])}</b>{note} <span class="lbl">{e((c["label"] or "")[:64])}</span>'
+            f' <span class="msgs">{c["msgs"]}msg</span></label>')
+    browser = (f'<form method="post" action="/track"><div class="srows">{"".join(srows)}</div>'
+               f'<button>선택 저장 — SOPHIA 는 이것만 굴림(🟢 작업중은 비켜줌)</button></form>'
+               if srows else "<p>세션 없음</p>")
+
     cards = []
     for p in state["projects"]:
         decs = "".join(f"<li>{e(q)}</li>" for q in p["decisions"]) or "<li>(없음)</li>"
@@ -111,9 +147,18 @@ h1{{font-size:18px;margin:0}} .sub{{color:#888}}
 .m{{font-size:12px;color:#06c}} .i{{color:#666;font-size:12px;margin-bottom:6px}}
 .card ul{{margin:4px 0 0;padding-left:18px}} .card li{{font-size:12px;margin:2px 0}}
 pre{{background:#f7f7f7;border-radius:8px;padding:12px;white-space:pre-wrap;font-size:12px}}
+.srows{{display:flex;flex-direction:column;gap:2px;margin:8px 0;max-height:280px;overflow:auto}}
+.srow{{display:flex;gap:8px;align-items:center;padding:4px 6px;border-radius:6px}}
+.srow:hover{{background:#f4f7ff}} .lbl{{color:#666;font-size:12px;flex:1;overflow:hidden;
+white-space:nowrap;text-overflow:ellipsis}} .msgs{{color:#aaa;font-size:11px}}
+.act{{color:#0a0;font-size:11px}} button{{margin-top:8px;padding:6px 12px;cursor:pointer}}
+h2{{font-size:15px;margin-top:24px}}
 </style></head><body>
 <header><h1>SOPHIA</h1><span>{e(badge)}</span><span class="sub">· {e(budget_line)} · 30s 자동새로고침</span></header>
-<div class="grid">{''.join(cards) or '<p>tracked 프로젝트 없음 — python3 -m sophia track</p>'}</div>
+<h2>🗂 세션 — 이어서 할 것 고르기 (🟢=지금 작업중)</h2>
+{browser}
+<h2>📂 SOPHIA 가 맡은 프로젝트</h2>
+<div class="grid">{''.join(cards) or '<p>아직 선택 안 함 — 위에서 고르세요</p>'}</div>
 <h2 style="font-size:15px">📬 최신 다이제스트(한 통)</h2>
 <pre>{e(state['digest'])}</pre>
 </body></html>"""
@@ -137,6 +182,27 @@ def main() -> int:
             except Exception as ex:  # 렌더 실패해도 서버 안 죽게
                 self.send_response(500); self.end_headers()
                 self.wfile.write(f"error: {ex}".encode("utf-8"))
+
+        def do_POST(self):
+            if self.path != "/track":
+                self.send_response(404); self.end_headers(); return
+            try:
+                from urllib.parse import parse_qs
+                n = int(self.headers.get("Content-Length", 0))
+                selected = set(parse_qs(self.rfile.read(n).decode("utf-8")).get("cwd", []))
+                reg = Registry.load()
+                cands = _candidates(set(reg.cwds()))
+                titles = {c["cwd"]: (c["label"] or "") for c in cands}
+                shown = set(titles)
+                for cwd in selected:                       # 체크된 것 track(제목을 note 로)
+                    reg.track(cwd, note=titles.get(cwd, "")[:80])
+                for cwd in list(reg.cwds()):               # 보였는데 체크 해제 → untrack
+                    if cwd in shown and cwd not in selected:
+                        reg.untrack(cwd)
+                reg.save()
+            except Exception:
+                pass
+            self.send_response(303); self.send_header("Location", "/"); self.end_headers()
 
         def log_message(self, *a):
             pass  # 조용히
