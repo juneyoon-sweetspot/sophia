@@ -13,9 +13,9 @@ def _state(running=True):
         "loop": {"running": running, "pid": "123"},
         "budget": {"date": "2026-06-04", "start_pct": 17},
         "projects": [
-            {"id": "stage", "cwd": "/x/stage", "intent": "CRM 검증", "mode": "quiet",
+            {"id": "stage", "cwd": "/x/stage", "intent": "CRM 검증", "mode": "quiet", "goal": "CRM 검증",
              "decisions": ["운영 시스템이 뭐냐?"]},
-            {"id": "guide", "cwd": "/x/guide", "intent": "데이터 가이드", "mode": "groundwork",
+            {"id": "guide", "cwd": "/x/guide", "intent": "데이터 가이드", "mode": "groundwork", "goal": "",
              "decisions": []},
         ],
         "digest": "■ 결정이 필요합니다 (1건)\n  1. [stage] 운영 시스템?",
@@ -61,3 +61,11 @@ def test_render_session_browser_and_active_badge():
     assert "checked" in h                       # tracked=True 면 체크됨
     assert "작업중" in h                         # active 배지
     assert "/track" in h                         # 선택 저장 폼
+
+
+def test_render_goal_input_form():
+    h = dash.render(_state())
+    assert 'action="/goal"' in h               # 목표 저장 폼
+    assert 'name="intent"' in h                 # 목표 입력칸
+    assert 'value="CRM 검증"' in h               # 기존 목표 채워짐
+    assert "비우면 자동 추론" in h                # 빈 목표 placeholder

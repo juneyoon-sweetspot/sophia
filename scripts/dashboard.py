@@ -96,6 +96,7 @@ def gather() -> dict:
         )
         projects.append({
             "id": nm, "cwd": t.cwd, "intent": t.intent or t.note or nm,
+            "goal": t.intent,   # 편집용 raw 목표(비었으면 자동초안/제목 폴백)
             "mode": mode, "decisions": [b.get("question", "") for b in blockers],
         })
     return {
@@ -103,6 +104,55 @@ def gather() -> dict:
         "projects": projects, "digest": _latest_digest(),
         "candidates": _candidates(tracked_cwds),
     }
+
+
+def _handle_track(selected: set) -> None:
+    """체크된 세션 track / 보였는데 해제된 건 untrack. 새로 선택된 건 목표 자동초안."""
+    reg = Registry.load()
+    titles = {c["cwd"]: c["label"] for c in _candidates(set(reg.cwds()))}
+    shown = set(titles)
+    for cwd in selected:
+        reg.track(cwd, note=(titles.get(cwd, "") or "")[:80])
+    for cwd in list(reg.cwds()):
+        if cwd in shown and cwd not in selected:
+            reg.untrack(cwd)
+    reg.save()
+    _draft_missing_goals(reg)
+
+
+def _handle_goal(cwd: str, intent: str) -> None:
+    """카드에서 편집한 목표 한 줄을 레지스트리 intent 에 저장(워커 방향)."""
+    reg = Registry.load()
+    if not any(t.cwd == cwd for t in reg.items):
+        reg.track(cwd)
+    for t in reg.items:
+        if t.cwd == cwd:
+            t.intent = (intent or "").strip()
+    reg.save()
+
+
+def _draft_missing_goals(reg: Registry) -> None:
+    """목표(intent) 빈 tracked 프로젝트에 한 줄 자동초안(brief). 세션이 빈약하면 빈약."""
+    todo = [t for t in reg.items if not t.intent]
+    if not todo:
+        return
+    import asyncio
+    from sophia.adapters.sessions import draft_brief
+    from sophia.adapters.thinker.claude_cli import ClaudeCliThinker
+    latest = {g.cwd: g.latest for g in group_by_cwd()}
+    th = ClaudeCliThinker()
+    for t in todo:
+        si = latest.get(t.cwd)
+        if not si:
+            continue
+        try:
+            b = asyncio.run(draft_brief(si, th))
+            t.intent = b.get("intent", "") or t.note
+            t.progress = t.progress or b.get("progress", "")
+            t.boundaries = t.boundaries or b.get("boundaries", "")
+        except Exception:
+            pass
+    reg.save()
 
 
 def render(state: dict) -> str:
@@ -133,7 +183,11 @@ def render(state: dict) -> str:
         <div class="card">
           <div class="m">{e(_MODE_LABEL.get(p['mode'], p['mode']))}</div>
           <h3>{e(p['id'])} <span class="n">결정 {len(p['decisions'])}</span></h3>
-          <div class="i">{e(p['intent'][:90])}</div>
+          <form method="post" action="/goal" class="goalf">
+            <input type="hidden" name="cwd" value="{e(p['cwd'])}">
+            <input name="intent" value="{e(p['goal'])}" placeholder="목표 한 줄 (비우면 자동 추론)">
+            <button>저장</button>
+          </form>
           <ul>{decs}</ul>
         </div>""")
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
@@ -154,6 +208,8 @@ pre{{background:#f7f7f7;border-radius:8px;padding:12px;white-space:pre-wrap;font
 white-space:nowrap;text-overflow:ellipsis}} .msgs{{color:#aaa;font-size:11px}}
 .act{{color:#0a0;font-size:11px}} button{{margin-top:8px;padding:6px 12px;cursor:pointer}}
 h2{{font-size:15px;margin-top:24px}}
+.goalf{{display:flex;gap:4px;margin:4px 0}} .goalf input{{flex:1;font-size:12px;padding:4px}}
+.goalf button{{margin:0;padding:4px 8px;font-size:11px}}
 </style></head><body>
 <header><h1>SOPHIA</h1><span>{e(badge)}</span><span class="sub">· {e(budget_line)} · 30s 자동새로고침</span></header>
 <h2>🗂 세션 — 이어서 할 것 고르기 (🟢=지금 작업중)</h2>
@@ -185,22 +241,16 @@ def main() -> int:
                 self.wfile.write(f"error: {ex}".encode("utf-8"))
 
         def do_POST(self):
-            if self.path != "/track":
-                self.send_response(404); self.end_headers(); return
+            from urllib.parse import parse_qs
+            n = int(self.headers.get("Content-Length", 0))
+            form = parse_qs(self.rfile.read(n).decode("utf-8"))
             try:
-                from urllib.parse import parse_qs
-                n = int(self.headers.get("Content-Length", 0))
-                selected = set(parse_qs(self.rfile.read(n).decode("utf-8")).get("cwd", []))
-                reg = Registry.load()
-                cands = _candidates(set(reg.cwds()))
-                titles = {c["cwd"]: (c["label"] or "") for c in cands}
-                shown = set(titles)
-                for cwd in selected:                       # 체크된 것 track(제목을 note 로)
-                    reg.track(cwd, note=titles.get(cwd, "")[:80])
-                for cwd in list(reg.cwds()):               # 보였는데 체크 해제 → untrack
-                    if cwd in shown and cwd not in selected:
-                        reg.untrack(cwd)
-                reg.save()
+                if self.path == "/track":
+                    _handle_track(set(form.get("cwd", [])))
+                elif self.path == "/goal":
+                    _handle_goal(form.get("cwd", [""])[0], form.get("intent", [""])[0])
+                else:
+                    self.send_response(404); self.end_headers(); return
             except Exception:
                 pass
             self.send_response(303); self.send_header("Location", "/"); self.end_headers()
