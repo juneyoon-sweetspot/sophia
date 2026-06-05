@@ -42,6 +42,9 @@ from sophia.core.state.handoff import Handoff  # noqa: E402
 DIGEST_DIR = Path.home() / ".sophia" / "digests"
 HANDOFF_DIR = Path.home() / ".sophia" / "handoffs"
 BUDGET_LEDGER = Path.home() / ".sophia" / "day-budget.json"
+AUTO_PICK_N = 3   # 선택 없을 때 자동으로 굴릴 최근 프로젝트 수
+# 잡동사니(홈·데스크톱·다운로드)는 자동선택에서 제외 — '프로젝트'가 아님.
+_JUNK = {str(Path.home()), str(Path.home() / "Desktop"), str(Path.home() / "Downloads")}
 
 # 진행 가능(안 막혔거나 사람이 건드림): 진전 기준을 향해 한 스텝.
 READONLY_REQUEST = (
@@ -135,12 +138,22 @@ def main() -> int:
     args = ap.parse_args()
 
     reg = Registry.load()
-    if not reg.items:
-        print("등록된 프로젝트 없음. `python3 -m sophia track` 로 고르세요.")
-        return 1
-    projects = [pr for t in reg.items if (pr := _project_for(t))]
+    items = reg.items
+    auto = False
+    if not items:
+        # 선택 없음 → SOPHIA 가 알아서 최근 프로젝트 몇 개 고른다(잡동사니 제외). 명시 선택이
+        # 생기면 그게 우선. ephemeral — 레지스트리엔 안 쓴다(사용자가 안 고른 거라).
+        auto = True
+        from sophia.adapters.registry import Tracked
+        cands = import_projects(rank="recency", top=AUTO_PICK_N,
+                                exclude_cwds=_JUNK, min_user_msgs=2)
+        items = [Tracked(cwd=c.meta["cwd"]) for c in cands]
+        if items:
+            print(f"ⓘ 선택 없음 → 최근 프로젝트 {len(items)}개 자동 선택: "
+                  + ", ".join(Path(t.cwd).name for t in items))
+    projects = [pr for t in items if (pr := _project_for(t))]
     if not projects:
-        print("tracked cwd 에서 사람 세션을 못 찾음.")
+        print("굴릴 프로젝트 없음(선택도, 자동선택 후보도 없음). `python3 -m sophia track`.")
         return 1
 
     # quota + 하루 예산

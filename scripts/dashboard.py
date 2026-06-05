@@ -99,6 +99,25 @@ def gather() -> dict:
             "goal": t.intent,   # 편집용 raw 목표(비었으면 자동초안/제목 폴백)
             "mode": mode, "decisions": [b.get("question", "") for b in blockers],
         })
+    # 자동 선택돼 돈 프로젝트(레지스트리엔 없지만 handoff 있음)도 보여준다 — "(자동)".
+    reg_ids = {Path(t.cwd).name for t in reg.items}
+    base2cwd = {Path(g.cwd).name: g.cwd for g in group_by_cwd()}
+    if HANDOFF_DIR.exists():
+        for hp in sorted(HANDOFF_DIR.glob("*.json")):
+            if hp.stem in reg_ids or hp.stem not in base2cwd:
+                continue
+            ho = Handoff.load(hp) if hp.exists() else None
+            if ho is None:
+                continue
+            cwd = base2cwd[hp.stem]
+            bl = getattr(ho, "blockers", []) or []
+            projects.append({
+                "id": hp.stem, "cwd": cwd, "intent": "(자동 선택 — 목표 주면 고정)",
+                "goal": "", "mode": project_mode(
+                    len(bl), getattr(ho, "blocked_mtime", 0.0),
+                    getattr(ho, "groundwork_mtime", 0.0), latest_mtime.get(cwd, 0.0)),
+                "decisions": [b.get("question", "") for b in bl], "auto": True,
+            })
     return {
         "loop": _loop_state(), "budget": _budget_state(),
         "projects": projects, "digest": _latest_digest(),
@@ -181,7 +200,7 @@ def render(state: dict) -> str:
         decs = "".join(f"<li>{e(q)}</li>" for q in p["decisions"]) or "<li>(없음)</li>"
         cards.append(f"""
         <div class="card">
-          <div class="m">{e(_MODE_LABEL.get(p['mode'], p['mode']))}</div>
+          <div class="m">{e(_MODE_LABEL.get(p['mode'], p['mode']))}{' · 자동' if p.get('auto') else ''}</div>
           <h3>{e(p['id'])} <span class="n">결정 {len(p['decisions'])}</span></h3>
           <form method="post" action="/goal" class="goalf">
             <input type="hidden" name="cwd" value="{e(p['cwd'])}">
