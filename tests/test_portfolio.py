@@ -142,3 +142,26 @@ def test_failing_project_does_not_kill_portfolio(tmp_path):
     digests = asyncio.run(pf.run())       # 예외 안 터지고 정상 반환
     assert isinstance(digests, list)
     assert proj.cycles_done == 0          # 전진 못 함(실패)
+
+
+def test_digest_marks_stale_blocker():
+    """blocked_mtime이 25h 전이면 경과 마커가 붙는다."""
+    old_ts = 1000.0   # 고정값 (now_ts=25h 뒤로 주입)
+    now = old_ts + 25 * 3600
+    p = Project(
+        id="x", goal="테스트 프로젝트",
+        blockers=[Blocker("x", "결정이 필요한 질문", leverage=3)],
+        meta={"blocked_mtime": old_ts},
+    )
+    d = build_digest([p], now_tick=0, now_ts=now)
+    assert "전 차단" in d
+    assert "결정이 필요한 질문" in d   # 질문 자체는 출력 유지
+
+
+def test_digest_no_stale_marker_when_no_blocked_mtime():
+    """blocked_mtime=0이면 (데이터 없음) 마커 없음."""
+    p = Project(id="x", goal="목표", blockers=[Blocker("x", "질문", leverage=1)])
+    # blocked_mtime 없이, 아주 미래의 now_ts 주입해도 마커 없어야 함
+    d = build_digest([p], now_tick=0, now_ts=9_999_999_999.0)
+    assert "전 차단" not in d
+    assert "질문" in d

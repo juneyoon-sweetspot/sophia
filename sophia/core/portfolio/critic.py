@@ -13,7 +13,8 @@ from typing import Literal
 
 # 코드 냄새 패턴: 파일확장자, 메서드호출, 절대경로
 _CODE_PATTERN = re.compile(
-    r'\b\w+\.(py|ts|js|json|yaml|yml|sh|md|sql|html|css|env)\b'
+    r'\b\w+\.(py|ts|js|json|yaml|yml|sh|md|sql|html|css|env'
+    r'|gs|rb|go|rs|java|kt|swift|vue|svelte|php|cs|cpp|c|h)(?![A-Za-z0-9])'
     r'|\.\w+\('
     r'|/[\w/\-.]+/[\w\-.]+',
     re.IGNORECASE,
@@ -29,7 +30,11 @@ _INTERP_PATTERN = re.compile(
     r'|무엇부터'
     r'|어느\s*(방향|시점|단계|순서)'
     r'|how\s+to\b'
-    r'|which\s+(approach|method|strategy)\b',
+    r'|which\s+(approach|method|strategy)\b'
+    # ↓ 신규: A-or-B 양자택일 해석 구조 (Critic C1: \w 한정 + 중간어 허용)
+    r'|\w+냐\b[\s\S]*?\w+냐'                    # ~냐 ... ~냐 (중간어 허용)
+    r'|\w+지\b[\s\S]*?\w+지\b'                  # ~ㄹ지 ... ~ㄹ지 / ~인지 ~인지
+    r'|\w+인가요?\s+아니면\s+\w+\s*인가요?',    # ~인가요 아니면 ~인가요
     re.IGNORECASE,
 )
 

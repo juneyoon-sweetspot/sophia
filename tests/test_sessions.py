@@ -169,3 +169,18 @@ def test_read_session_prefers_custom_title_over_ai(tmp_path):
     ]
     f.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lines), encoding="utf-8")
     assert read_session(f).title == "내가 정한 이름"
+
+
+def test_import_projects_uses_title_over_first_user_text(tmp_path):
+    """title이 있으면 first_user_text 대신 title을 goal로 쓴다."""
+    d = tmp_path / "-proj"; d.mkdir()
+    f = d / "s.jsonl"
+    lines = [
+        json.dumps({"type": "ai-title", "aiTitle": "단순화된 타이틀"}),
+        json.dumps({"type": "user", "message": {"content": "첫 번째 엄청 긴 지시문입니다 블라블라"}, "cwd": "/proj"}),
+    ]
+    f.write_text("\n".join(lines), encoding="utf-8")
+    hd = tmp_path / "hd"
+    ps = import_projects(root=tmp_path, min_user_msgs=1, handoff_dir=hd)
+    assert len(ps) == 1
+    assert ps[0].goal == "단순화된 타이틀"

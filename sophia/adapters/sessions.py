@@ -319,7 +319,7 @@ def import_projects(
         projects.append(
             Project(
                 id=pid,
-                goal=si.first_user_text,
+                goal=(si.title or si.first_user_text)[:80],
                 handoff_path=str(handoff_dir / f"{pid}.json"),
                 # '이어가기'의 자연스러운 지점 = 사람이 마지막으로 시킨 것.
                 pending_requests=[si.last_user_text],

@@ -52,3 +52,18 @@ def test_critic_false_fallback():
     ])
     d = build_digest([p], now_tick=0, apply_critic=False)
     assert "어떤 방법으로 구현할까요?" in d
+
+def test_a_or_b_interpretation_excluded():
+    # 핵심 케이스
+    assert classify_blocker("이 분석의 대상이 mystaff 전체냐 SOPHIA 하나냐?") == "excluded"
+    assert classify_blocker("API를 REST로 할지 GraphQL로 할지") == "excluded"   # ~ㄹ지 ~ㄹ지
+    assert classify_blocker("기능을 A모듈에 넣을지 B모듈에 넣을지") == "excluded"
+    # 기존 오탐 방지 유지
+    assert classify_blocker("어떤 팀에 승인을 받아야 하나요?") == "ok"
+
+
+def test_new_extensions_flagged():
+    assert classify_blocker("Code.gs 파일을 수정해야 하나요?") == "flagged"
+    assert classify_blocker("main.go 어디에 추가할지?") == "flagged"
+    assert classify_blocker("Service.java를 바꿔야 하나요?") == "flagged"
+    assert classify_blocker("lib.rs에 트레이트를 추가할지?") == "flagged"

@@ -105,7 +105,7 @@ def _project_for(t) -> Project | None:
     if not ps:
         return None
     p = ps[0]
-    p.goal = t.intent or t.note or Path(t.cwd).name
+    p.goal = t.intent or t.note or p.goal or Path(t.cwd).name
     p.meta["progress"] = t.progress or "(미지정)"
     p.meta["boundaries"] = t.boundaries or "(없음)"
     prior = _load_handoff(p.handoff_path)

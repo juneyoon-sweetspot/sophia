@@ -10,10 +10,13 @@ SOPHIA 의 보고 모델: 매 작업마다 사람을 건드리지 않는다. 블
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from .critic import classify_blocker
 from .project import Project
+
+_STALE_BLOCKER_HOURS = 24   # 이 이상 경과된 차단 항목에 경과 표시
 
 
 def build_digest(
@@ -21,6 +24,7 @@ def build_digest(
     now_tick: int,
     stale_threshold: int = 14,
     apply_critic: bool = True,
+    now_ts: float | None = None,   # None → time.time(). 테스트 결정론성 확보.
 ) -> str:
     """프로젝트 리스트 → 사람이 읽을 단일 다이제스트 텍스트.
 
@@ -28,6 +32,8 @@ def build_digest(
     apply_critic: True 면 critic gate 로 해석질문 제외/코드용어 표시(기본 True, backward compatible).
     """
     lines: list[str] = []
+    _now = now_ts if now_ts is not None else time.time()
+    _stale_s = _STALE_BLOCKER_HOURS * 3600
 
     # 1) 결정 필요 — 모든 블로커를 leverage 순으로 (이게 다이제스트의 심장)
     blockers = [(p, b) for p in projects for b in p.blockers]
@@ -54,7 +60,13 @@ def build_digest(
             tag = f"[{p.org}/{p.id}]" if p.org else f"[{p.id}]"
             goal_snip = f" {p.goal[:30]}" if p.goal else ""
             prefix = "[⚠기술용어] " if label == "flagged" else ""
-            lines.append(f"  {i}. {tag}{goal_snip}{cwd_label}")
+            blocked_at = p.meta.get("blocked_mtime", 0.0)
+            if blocked_at and (_now - blocked_at) > _stale_s:
+                elapsed_h = int((_now - blocked_at) / 3600)
+                stale_note = f" [{elapsed_h // 24}일 전 차단]" if elapsed_h >= 48 else f" [{elapsed_h}h 전 차단]"
+            else:
+                stale_note = ""
+            lines.append(f"  {i}. {tag}{goal_snip}{cwd_label}{stale_note}")
             lines.append(f"     ↳ {prefix}{b.question}")
     elif excluded_count:
         # rendered=0, excluded>0 — 모든 블로커가 자동처리됨
