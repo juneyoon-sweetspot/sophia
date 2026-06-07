@@ -42,6 +42,7 @@ from sophia.core.state.handoff import Handoff  # noqa: E402
 DIGEST_DIR = Path.home() / ".sophia" / "digests"
 HANDOFF_DIR = Path.home() / ".sophia" / "handoffs"
 BUDGET_LEDGER = Path.home() / ".sophia" / "day-budget.json"
+PACE_STATE = Path.home() / ".sophia" / "pace-state.json"   # adaptive interval.py 입력
 AUTO_PICK_N = 3   # 선택 없을 때 자동으로 굴릴 최근 프로젝트 수
 # 잡동사니(홈·데스크톱·다운로드)는 자동선택에서 제외 — '프로젝트'가 아님.
 _JUNK = {str(Path.home()), str(Path.home() / "Desktop"), str(Path.home() / "Downloads")}
@@ -145,6 +146,38 @@ def _daily_start_pct(current_week_pct: float, today: str) -> float:
     return current_week_pct
 
 
+def _write_pace_state(remaining_pp, exhausted: bool, week_pct) -> None:
+    """pace-state.json 갱신 — interval.py 가 적응형 간격을 정하는 입력.
+
+    last_round_pp = 이번 라운드 week_pct − 직전 라운드 week_pct_at_write (양수일 때만).
+    PTY 비용 큰 usage 재호출 없이 라운드 간 diff 로 실측 pp 를 보정한다(EMA 입력).
+    실패해도 본 흐름은 중단하지 않는다.
+    """
+    last_round_pp = None
+    try:
+        prev = json.loads(PACE_STATE.read_text(encoding="utf-8"))
+        prev_w = prev.get("week_pct_at_write")
+        if week_pct is not None and prev_w is not None:
+            diff = float(week_pct) - float(prev_w)
+            if diff > 0:
+                last_round_pp = round(diff, 2)
+    except Exception:
+        pass
+    data = {
+        "date": date.today().isoformat(),
+        "remaining_pp": round(remaining_pp, 2) if remaining_pp is not None else None,
+        "exhausted": bool(exhausted),
+        "timestamp": time.time(),
+        "week_pct_at_write": round(float(week_pct), 2) if week_pct is not None else None,
+        "last_round_pp": last_round_pp,
+    }
+    try:
+        PACE_STATE.parent.mkdir(parents=True, exist_ok=True)
+        PACE_STATE.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stamp", default="")
@@ -185,6 +218,13 @@ def main() -> int:
             args.max_week_pct is not None and (u.week_pct or 0) >= args.max_week_pct)
     else:
         print(f"📊 사용량 읽기 실패(예산 게이트 생략). mode={u.mode}")
+
+    # adaptive interval.py 입력 갱신 — over_budget 조기반환 전에 써야 소진 신호가 반영됨.
+    _write_pace_state(
+        remaining_pp=remaining if u.ok else None,
+        exhausted=over_budget,
+        week_pct=float(u.week_pct or 0) if u.ok else None,
+    )
 
     from sophia.adapters import telemetry
     telemetry.reset()

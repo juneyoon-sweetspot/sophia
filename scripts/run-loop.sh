@@ -14,7 +14,9 @@
 #
 # 전제(유저 책임): 컴 안 꺼짐(잠자기 끄기/caffeinate) · 로그인 유지 · keychain 잠금 안 됨.
 #   재부팅·로그아웃하면 멈춤 → 다시 'start'.
-# 환경변수: SOPHIA_INTERVAL_S(기본 10800=3h) · SOPHIA_DAILY_PCT(기본 20) · SOPHIA_MAX_WEEK_PCT(기본 60)
+# 환경변수: SOPHIA_INTERVAL_S(기본 10800=3h, adaptive fallback) · SOPHIA_DAILY_PCT(기본 20) ·
+#           SOPHIA_MAX_WEEK_PCT(기본 60) · SOPHIA_AWAY_THRESHOLD_S(기본 3600) ·
+#           SOPHIA_NIGHT_END_H(기본 9) · SOPHIA_PP_PER_ROUND(기본 4.0) · SOPHIA_DAY_INTERVAL_S(기본 7200)
 set -u
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PIDFILE="$HOME/.sophia/loop.pid"
@@ -50,7 +52,7 @@ case "$cmd" in
     else echo "도는 루프 없음"; rm -f "$PIDFILE"; fi
     exit 0 ;;
   status)
-    if _running; then echo "도는 중 (pid $(cat "$PIDFILE")) · 간격 ${INTERVAL}s · 예산 ${DAILY}pp/일"
+    if _running; then echo "도는 중 (pid $(cat "$PIDFILE")) · 간격 adaptive (fallback ${INTERVAL}s) · 예산 ${DAILY}pp/일"
     else echo "안 도는 중"; fi
     exit 0 ;;
   start) : ;;
@@ -74,7 +76,10 @@ echo "  전제: 컴 안 꺼짐 + 로그인 유지. stop: run-loop.sh stop"
 while _running; do   # PIDFILE 사라지면(stop) 루프 종료
   echo "=== 라운드 $(date '+%m-%d %H:%M') ==="
   _run_round
-  echo "--- 다음 라운드까지 ${INTERVAL}s 대기 ---"
-  sleep "$INTERVAL"
+  # 다음 간격은 적응형(자리 비움 + 남은 예산÷남은 야간)으로 산정. 실패/오염 시 고정 간격 폴백.
+  NEXT_S=$(python3 "$DIR/scripts/interval.py" --daily-pct "$DAILY" 2>/dev/null || echo "$INTERVAL")
+  [[ "$NEXT_S" =~ ^[0-9]+$ ]] || NEXT_S="$INTERVAL"   # stdout 오염 방어
+  echo "--- 다음 라운드까지 ${NEXT_S}s 대기 (adaptive) ---"
+  sleep "$NEXT_S"
 done
 rm -f "$PIDFILE"
