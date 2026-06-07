@@ -50,6 +50,19 @@ def test_digest_no_blockers_message():
     d = build_digest([Project(id="a", goal="g")], now_tick=0)
     assert "결정이 필요한 항목 없음" in d
 
+def test_digest_shows_goal_and_cwd():
+    p = Project(id="x", goal="목표설명", blockers=[Blocker("x", "결정질문", leverage=1)],
+                meta={"cwd": "/home/user/myproject"})
+    d = build_digest([p], now_tick=0)
+    assert "목표설명" in d
+    assert "myproject" in d
+
+
+def test_digest_without_cwd_no_error():
+    p = Project(id="x", goal="목표", blockers=[Blocker("x", "질문", leverage=1)])
+    d = build_digest([p], now_tick=0)  # meta={}
+    assert "질문" in d
+
 
 # ---------- portfolio scheduling ----------
 

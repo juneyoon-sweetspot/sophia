@@ -13,8 +13,9 @@ from sophia.core.loop.scheduler import Scheduler
 from sophia.core.manager.blockers import derive_blockers
 from sophia.core.manager.director import Director
 from sophia.core.manager.premise import Premise, PremiseOutcome
+from sophia.core.portfolio.digest import build_digest
 from sophia.core.portfolio.portfolio import Portfolio
-from sophia.core.portfolio.project import Project
+from sophia.core.portfolio.project import Blocker, Project
 from sophia.ports.worker import WorkResult
 
 from .conftest import noop_sleep, zero_clock
@@ -167,3 +168,9 @@ def test_blocker_persists_across_ticks_until_digest(tmp_path):
     # tick1 의 결정거리가 끝까지 살아 다이제스트에 떠야 한다.
     assert [b.question for b in proj.blockers] == ["tick1 결정거리"]
     assert any("tick1 결정거리" in d for d in digests)
+
+def test_digest_critic_false_shows_all_blockers():
+    """apply_critic=False: 코드용어 포함 질문도 그대로 출력."""
+    p = Project(id="x", goal="목표", blockers=[Blocker("x", "build.py 어떻게 수정할지", leverage=3)])
+    d = build_digest([p], now_tick=0, apply_critic=False)
+    assert "build.py 어떻게 수정할지" in d
