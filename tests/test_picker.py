@@ -13,7 +13,7 @@ from sophia.ui.picker import (
 def _group(cwd, first="첫 지시", total=10, title=""):
     si = SessionInfo(cwd=cwd, session_id="s", first_user_text=first,
                      last_user_text="끝", mtime=1.0, n_user_msgs=total, title=title)
-    return CwdGroup(cwd=cwd, latest=si, n_sessions=1, total_user_msgs=total)
+    return CwdGroup(cwd=cwd, latest=si, representative=si, n_sessions=1, total_user_msgs=total)
 
 
 def _state(*cwds):

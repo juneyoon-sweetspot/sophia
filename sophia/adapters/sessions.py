@@ -26,6 +26,44 @@ DEFAULT_ROOT = Path.home() / ".claude" / "projects"
 # goal/의도로 쓰기엔 노이즈인 user 라인 프리픽스(슬래시커맨드·하네스 주입·로컬 출력).
 _NOISE_PREFIXES = ("<", "[Request interrupted", "Caveat:", "/")
 
+
+# goal 대표 선택 시 '내용 없음'으로 판정할 패턴 (보수적 — 명확한 케이스만).
+# len > 3 인데도 noisy 한 문구만 이 목록에 넣는다(len ≤ 3 분기에서 이미 걸러지는
+# ok/네/응/yes/go 등은 중복이지만 harmless 하므로 문서화 목적으로 남긴다).
+_TRIVIAL_WORDS: frozenset[str] = frozenset({
+    "ok", "okay", "yes", "no", "sure", "continue", "go", "go ahead",
+    "reply ok", "done", "got it", "noted",
+    "안녕", "네", "응", "예", "알겠어", "알겠습니다", "좋아", "좋아요",
+    "계속", "계속해", "계속해줘", "해줘", "그래",
+})
+
+# Claude Code resume 시 나타나는 ASCII 아트 배너 첫 문자 집합.
+_TRIVIAL_BLOCK_CHARS: frozenset[str] = frozenset("▐▛▜▟▙█▄▀")
+
+
+def _is_trivial_text(txt: str) -> bool:
+    """first_user_text 가 goal 대표로 쓰기 무의미한 노이즈면 True.
+
+    보수적: 명확한 케이스만 trivial 판정. 애매하면 False.
+    """
+    s = txt.strip()
+    if not s:
+        return True
+    # 3자 이하 — 한두 글자 ack/감탄사 ('ok'=2, '안녕'=2, '네'=1)
+    if len(s) <= 3:
+        return True
+    # 명시적 잡동사니 문구
+    if s.lower() in _TRIVIAL_WORDS:
+        return True
+    # file:// URL (데스크톱에서 파일 드래그 시 자동 삽입)
+    if s.startswith("file://"):
+        return True
+    # ASCII 아트 배너 (Claude Code 재개 노이즈)
+    if s[0] in _TRIVIAL_BLOCK_CHARS:
+        return True
+    return False
+
+
 # SOPHIA 자신이 일꾼/thinker 로 띄운 claude 세션의 첫 메시지 프리픽스.
 # 재임포트할 때 이걸 안 거르면 SOPHIA 가 자기 프롬프트를 '사용자 의도'로 다시 읽는
 # 오염 루프에 빠진다(실측: AX-Partners goal 이 SOPHIA 프롬프트로 덮였다).
@@ -238,6 +276,33 @@ async def draft_brief(si: "SessionInfo", thinker) -> dict:
 _SAFE_BOUNDARY = "SOPHIA 는 분석·제안만 하고, 파일/외부 변경 없이 비가역 결정은 사람에게 남긴다."
 
 
+def _pick_representative(sessions: list[SessionInfo]) -> SessionInfo:
+    """cwd 에 속한 세션 목록에서 goal/표시 대표를 고른다.
+
+    sessions 는 mtime 내림차순 정렬을 가정한다(group_by_cwd 의 scan_sessions 보장).
+    폴백(sessions[0])은 이 가정 하에 mtime 최신 세션 = latest 를 반환한다.
+
+    우선순위:
+    1. title(custom/ai) 있는 세션 → n_user_msgs 가장 많은 것
+    2. first_user_text 가 trivial 아닌 세션 → n_user_msgs 가장 많은 것
+    3. 폴백: sessions[0] (= latest, 기존 동작)
+
+    sessions 가 비어 있으면 안 된다(group_by_cwd 에서 보장됨).
+    """
+    # 1순위: titled 세션
+    titled = [s for s in sessions if s.title]
+    if titled:
+        return max(titled, key=lambda s: s.n_user_msgs)
+
+    # 2순위: non-trivial 첫지시
+    substantial = [s for s in sessions if not _is_trivial_text(s.first_user_text)]
+    if substantial:
+        return max(substantial, key=lambda s: s.n_user_msgs)
+
+    # 폴백: mtime 최신 (기존 동작 보존)
+    return sessions[0]
+
+
 def _slug(cwd: str) -> str:
     """cwd → 짧은 프로젝트 id (마지막 경로 조각)."""
     base = cwd.rstrip("/").rsplit("/", 1)[-1] or "root"
@@ -246,9 +311,13 @@ def _slug(cwd: str) -> str:
 
 @dataclass
 class CwdGroup:
-    """한 cwd 로 묶인 세션들의 집계. latest 가 goal 의 대표."""
+    """한 cwd 로 묶인 세션들의 집계.
+    latest         = mtime 기준 최신 세션 (활동 시각·랭킹용).
+    representative = goal/표시 대표 세션 (title 또는 substantive 우선).
+    """
     cwd: str
     latest: SessionInfo
+    representative: SessionInfo      # ← 신규 필수 필드 (defaults 앞)
     n_sessions: int = 0
     total_user_msgs: int = 0  # 그 cwd 에서 누적된 작업량(사용량 랭킹 키)
 
@@ -259,26 +328,32 @@ def group_by_cwd(
     exclude_cwds: set[str] | None = None,
     exclude_sophia: bool = True,
 ) -> list[CwdGroup]:
-    """모든 세션을 cwd 별로 묶어 집계. cwd 당 최신 세션 + 누적 사용량.
+    """모든 세션을 cwd 별로 묶어 집계.
 
+    latest = mtime 최신 세션(활동 시각·랭킹용).
+    representative = _pick_representative 선택 대표(goal/표시용).
     exclude_sophia: SOPHIA 자신의 세션 제외(재임포트 오염 차단). 기본 on.
     """
     exclude = exclude_cwds or set()
-    groups: dict[str, CwdGroup] = {}
+
+    # 1패스: cwd 별 세션 목록 수집 (scan_sessions 최신순 정렬 보장)
+    buckets: dict[str, list[SessionInfo]] = {}
     for si in scan_sessions(root, exclude_sophia=exclude_sophia):
         if not si.cwd or si.cwd in exclude:
             continue
-        g = groups.get(si.cwd)
-        if g is None:
-            groups[si.cwd] = CwdGroup(
-                cwd=si.cwd, latest=si, n_sessions=1, total_user_msgs=si.n_user_msgs
-            )
-        else:
-            g.n_sessions += 1
-            g.total_user_msgs += si.n_user_msgs
-            if si.mtime > g.latest.mtime:  # scan 은 최신순이라 보통 첫 게 latest
-                g.latest = si
-    return list(groups.values())
+        buckets.setdefault(si.cwd, []).append(si)
+
+    # 2패스: cwd 당 latest / representative / 집계
+    result: list[CwdGroup] = []
+    for cwd, sis in buckets.items():
+        result.append(CwdGroup(
+            cwd=cwd,
+            latest=sis[0],                      # scan_sessions 최신순 → [0] = latest
+            representative=_pick_representative(sis),
+            n_sessions=len(sis),
+            total_user_msgs=sum(s.n_user_msgs for s in sis),
+        ))
+    return result
 
 
 def import_projects(
@@ -314,12 +389,13 @@ def import_projects(
     handoff_dir.mkdir(parents=True, exist_ok=True)  # 없으면 핸드오프 저장이 조용히 실패
     projects: list[Project] = []
     for g in groups:
-        si = g.latest
+        rep = g.representative   # goal/표시 대표
+        si = g.latest            # 활동 시각·마지막 요청 소스
         pid = _slug(g.cwd)
         projects.append(
             Project(
                 id=pid,
-                goal=(si.title or si.first_user_text)[:80],
+                goal=(rep.title or rep.first_user_text)[:80],
                 handoff_path=str(handoff_dir / f"{pid}.json"),
                 # '이어가기'의 자연스러운 지점 = 사람이 마지막으로 시킨 것.
                 pending_requests=[si.last_user_text],
@@ -364,7 +440,7 @@ async def import_described(
         groups = groups[:top]
 
     summaries = await asyncio.gather(
-        *(summarize_session(g.latest, thinker, group=g) for g in groups)
+        *(summarize_session(g.representative, thinker, group=g) for g in groups)
     )
 
     handoff_dir = Path(handoff_dir)
@@ -373,7 +449,8 @@ async def import_described(
     for g, s in zip(groups, summaries):
         if drop_one_off and s.get("kind") == "one_off":
             continue
-        si = g.latest
+        si = g.latest       # pending_requests / meta 는 latest 유지
+        # goal 은 s["purpose"] 에서 옴 (representative 의 user_trace 기반)
         goal = s["purpose"] + (f" — {s['activity']}" if s.get("activity") else "")
         projects.append(
             Project(

@@ -45,7 +45,13 @@ BUDGET_LEDGER = Path.home() / ".sophia" / "day-budget.json"
 PACE_STATE = Path.home() / ".sophia" / "pace-state.json"   # adaptive interval.py 입력
 AUTO_PICK_N = 3   # 선택 없을 때 자동으로 굴릴 최근 프로젝트 수
 # 잡동사니(홈·데스크톱·다운로드)는 자동선택에서 제외 — '프로젝트'가 아님.
-_JUNK = {str(Path.home()), str(Path.home() / "Desktop"), str(Path.home() / "Downloads")}
+_JUNK = {
+    str(Path.home()),
+    str(Path.home() / "Desktop"),
+    str(Path.home() / "Downloads"),
+    str(Path.home() / "tmp"),     # 홈 임시 디렉토리 (실데이터 'reply OK' 케이스)
+    str(Path.home() / "temp"),    # 홈 임시 디렉토리 (영문)
+}
 
 # 진행 가능(안 막혔거나 사람이 건드림): 진전 기준을 향해 한 스텝.
 # 결정/질문은 비전문가 매니저가 한 줄로 알아듣게. 다이제스트가 외계어가 되는 걸 막는다.
